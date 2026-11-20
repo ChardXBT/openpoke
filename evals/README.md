@@ -22,7 +22,8 @@ schemas, a live model, Gmail stubbed, one isolated in-memory world copy per scen
 
 ```bash
 pip install -r server/requirements.txt -r evals/requirements.txt pytest
-python -m pytest                       # offline, no keys
+python -m pytest                       # offline, no keys (182 passed; pytest.ini already adds -q,
+                                       # so an extra -q hides the pass/fail count line)
 
 # a dev run (needs OPENROUTER_API_KEY in .env)
 python -m evals.harness.runner --setups b0,b1,b2,ours --split dev --sizes 30,200,1000 \
