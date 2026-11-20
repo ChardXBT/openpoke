@@ -163,8 +163,10 @@ class LLMClient:
         full = [{"role": "system", "content": system}, *messages]
         if self.provider == "openai":
             key = os.getenv("OPENAI_API_KEY", "").strip()
+            # reasoning_effort "none": chat completions refuses tools with reasoning on newer
+            # models, and OpenPoke's IA runs without extended thinking anyway (fair comparison).
             payload = {"model": self.model.split(":", 1)[1], "messages": full, "tools": tools,
-                       "max_completion_tokens": self.max_tokens}
+                       "max_completion_tokens": self.max_tokens, "reasoning_effort": "none"}
             return OPENAI_URL, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, payload
         key = os.getenv("OPENROUTER_API_KEY", "").strip()
         payload = {"model": self.model, "messages": full, "tools": tools, "max_tokens": self.max_tokens,
