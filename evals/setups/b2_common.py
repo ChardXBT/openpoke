@@ -234,7 +234,7 @@ class B2Common:
             if term_counts
             else 0.0
         )
-        vectors = self._embeddings_for(texts) if self.embeddings else None
+        vectors = self._embedding_matrix(texts) if self.embeddings else None
         index = _Index(
             agents=list(world.agents),
             texts=texts,
@@ -282,11 +282,7 @@ class B2Common:
         }
 
         if self.embeddings and index.embeddings is not None and index.agents:
-            query_vector = self._embeddings_for([query])[0]
-            semantic = [
-                _cosine(query_vector, document_vector)
-                for document_vector in index.embeddings
-            ]
+            semantic = (index.embeddings @ self._unit_vector(query)).tolist()
             semantic_order = sorted(
                 range(len(index.agents)), key=lambda i: (-semantic[i], i)
             )
@@ -302,12 +298,14 @@ class B2Common:
         self, index: _Index, query: str
     ) -> list[tuple[WorldAgent, float]]:
         query_counts = Counter(_tokens(query))
-        query_vector = self._embeddings_for([query])[0] if self.embeddings else None
+        semantic_all = None
+        if self.embeddings and index.embeddings is not None:
+            semantic_all = (index.embeddings @ self._unit_vector(query)).tolist()
         candidates: list[tuple[WorldAgent, float]] = []
         for position, agent in enumerate(index.agents):
             lexical = self._weighted_token_cosine(index, query_counts, position)
-            if query_vector is not None and index.embeddings is not None:
-                semantic = max(0.0, _cosine(query_vector, index.embeddings[position]))
+            if semantic_all is not None:
+                semantic = max(0.0, semantic_all[position])
                 similarity = 0.45 * lexical + 0.55 * semantic
             else:
                 similarity = lexical
@@ -342,6 +340,30 @@ class B2Common:
         if query_norm == 0.0 or document_norm == 0.0:
             return 0.0
         return numerator / (query_norm * document_norm)
+
+    def _embedding_matrix(self, texts: list[str]):
+        """Row-normalized float32 matrix, filled in chunks so peak memory stays small
+        (20,000 x 1,536 Python floats would be ~1 GB; this is ~120 MB)."""
+        import numpy as np
+
+        matrix = None
+        for start in range(0, len(texts), 1000):
+            chunk = np.asarray(self._embeddings_for(texts[start : start + 1000]), dtype=np.float32)
+            if matrix is None:
+                matrix = np.empty((len(texts), chunk.shape[1]), dtype=np.float32)
+            matrix[start : start + len(chunk)] = chunk
+        if matrix is None:
+            return None
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix /= np.where(norms == 0, 1.0, norms)
+        return matrix
+
+    def _unit_vector(self, text: str):
+        import numpy as np
+
+        vector = np.asarray(self._embeddings_for([text])[0], dtype=np.float32)
+        norm = float(np.linalg.norm(vector))
+        return vector / norm if norm else vector
 
     def _embeddings_for(self, texts: list[str]) -> list[list[float]]:
         if not texts:
