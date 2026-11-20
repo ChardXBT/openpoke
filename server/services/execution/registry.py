@@ -17,6 +17,7 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -161,6 +162,13 @@ class AgentRegistry:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def clone_in_memory(self, clock: Optional[Callable[[], datetime]] = None) -> "AgentRegistry":
+        """An independent in-memory copy (evals: one per scenario so tool calls never leak)."""
+        copy = AgentRegistry(Path(":memory:"), clock=clock or self._clock)
+        with self._lock, copy._lock:
+            self._conn.backup(copy._conn)
+        return copy
 
     @property
     def clock(self) -> Callable[[], datetime]:
@@ -426,14 +434,29 @@ _LEGACY_ROSTER = _DATA_DIR / "execution_agents" / "roster.json"
 
 _registry: Optional[AgentRegistry] = None
 _registry_lock = threading.Lock()
+# Per-task override (evals run many isolated scenarios concurrently in one process).
+_registry_override: ContextVar[Optional[AgentRegistry]] = ContextVar("openpoke_registry_override", default=None)
 
 
 def get_agent_registry() -> AgentRegistry:
     global _registry
+    override = _registry_override.get()
+    if override is not None:
+        return override
     with _registry_lock:
         if _registry is None:
             _registry = AgentRegistry(_DB_PATH, legacy_roster_path=_LEGACY_ROSTER)
         return _registry
+
+
+@contextmanager
+def use_registry(registry: AgentRegistry) -> Iterator[AgentRegistry]:
+    """Route ``get_agent_registry()`` to ``registry`` for the current task/context only."""
+    token = _registry_override.set(registry)
+    try:
+        yield registry
+    finally:
+        _registry_override.reset(token)
 
 
 def set_agent_registry(registry: Optional[AgentRegistry]) -> None:

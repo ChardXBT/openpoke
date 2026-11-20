@@ -261,6 +261,9 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
     target = reg.find(agent_name)
     irreversible = is_irreversible(instructions)
     is_send = irreversible and bool(_SEND_ACTION.search(instructions.casefold()))
+    if not ctx.enforce:  # ablation: plain reuse-or-create with #id/normalized lookup only
+        irreversible = is_send = False
+        create_new = True
 
     # 1. Ambiguity contract: never guess on a step that cannot be undone.
     if res.kind == "ambiguous" and irreversible and (target is None or target.id not in ctx.created):

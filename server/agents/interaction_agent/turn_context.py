@@ -15,6 +15,8 @@ class TurnContext:
     resolution: Resolution = field(default_factory=lambda: UNRESOLVED)
     event: Optional[EventMeta] = None
     created: set[int] = field(default_factory=set)  # agents created earlier in this IA turn
+    enforce: bool = True  # ambiguity contract + spawn checks (evals ablate this)
+    show_related: bool = True  # <related_agents> section (evals ablate this)
 
 
 current_turn: ContextVar[Optional[TurnContext]] = ContextVar("openpoke_turn_context", default=None)

@@ -68,7 +68,7 @@ def _render_reference_sections(latest_text: str, message_type: str, ctx: TurnCon
     query = latest_text
     if ctx.event is not None:
         query = " ".join(filter(None, [ctx.event.subject, ctx.event.sender, latest_text]))
-    if message_type == "user" or ctx.event is not None:
+    if ctx.show_related and (message_type == "user" or ctx.event is not None):
         skip = shown | set(ctx.resolution.candidates)
         related = [
             hit.agent for hit in search_agents(reg, query, include_archived=True, limit=MAX_RELATED + len(skip), now=now)
