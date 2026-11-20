@@ -87,7 +87,69 @@ never leak between scenarios.
 
 ## Results
 
-_Filled in from `evals/results/` after the headline runs._
+All numbers below are on the **held-out** scenarios (31, a different seed and wording from
+the dev set, frozen by hash before any held-out run). Full tables with intervals:
+`evals/results/heldout-*/summary.md`. Every run and decision: `evals/results/JOURNAL.md`.
+
+### The headline (Haiku 5.5, 30 → 20,000 agents)
+
+![Right decision rate vs roster size](../evals/results/heldout-haiku/accuracy_vs_size.png)
+
+| Agents | OpenPoke today | Every card | Common fork answer | **Ours** |
+|---:|---:|---:|---:|---:|
+| 30 | 97% | 97% | 98% | **97%** |
+| 200 | 97% | 94% | 92% | **97%** |
+| 1,000 | 94% | 94% | 89% | **95%** |
+| 5,000 | 88% | not run | 94% | **95%** |
+| 20,000 | 60% (n=10) | not run | 97% | **95%** |
+
+Paired difference, Ours minus OpenPoke today: +0 / +0 / +2 points at 30 / 200 / 1,000
+agents (not significant), **+10 [+2, +20] at 5,000** and **+40 [+10, +70] at 20,000**
+(n=10: the baseline costs $0.44 a turn there). Against the common fork answer accuracy is a
+tie (−2 to +7 points, intervals cross zero).
+
+What Ours does that the others do not, at every size:
+
+| | OpenPoke today | Every card | Common fork answer | **Ours** |
+|---|---:|---:|---:|---:|
+| Asked when the request was truly ambiguous | 67–83% | 33–67% | 40–100% | **100%** |
+| Wrong reuse (wrong agent / reused for new work) | 0–11% | 0% | up to 7% | **0%** |
+| Over-asked when the answer was clear | 0% | 0% | 0% | 4% |
+| Prompt tokens per turn at 1,000 → 20,000 agents | 55k → 880k | 112k → (672k/call) | 15k → 16k | **18k → 18k** |
+| Cost per turn at 5,000 agents | $0.115 | — | $0.002 | **$0.002** |
+| Median latency at 5,000 agents | 5.3 s | — | 3.8 s | **2.8 s** |
+
+### Other models
+
+- **Sonnet 5.5** (OpenPoke's production model): OpenPoke today 97% / 97% at 30 / 1,000
+  agents, the common answer 94% / 94%, Ours 94% / 90%. A strong model reads 1,000 names
+  well; Ours costs **$0.05 a turn against $0.18** there and **$0.68** for OpenPoke today at
+  5,000 agents. _(Sonnet at 5,000 for Ours and the common answer: see JOURNAL.)_
+- **GPT-6.1-terra** (OpenAI, second model family): OpenPoke today 90% / 90%, the common
+  answer 81% / 77%, **Ours 90% / 87%**; asked when ambiguous 33% / 0–33% / **67%**.
+
+### What each piece is worth (ablations, Haiku, 1,000 agents, 2 reps)
+
+| Variant | Correct | Note |
+|---|---:|---|
+| Ours | 95% | |
+| without the related-agents section | 90% | 4 duplicates: the model stopped finding older agents |
+| without the ambiguity contract | 94% | one wrong reuse |
+| without the resolver | 98% | the whole gap is family 10 ("repeat after clarifying"): the resolver's "ambiguous" hint overrode the user's earlier choice visible in the history. In live use the learned alias resolves it; the eval worlds cannot hold learned aliases. |
+
+### On other people's tests
+
+_(Filled in from `evals/results/external-haiku/` when the run completes.)_
+
+### How to read this
+
+- With strong current models and ≤1,000 agents, routing accuracy is already high for every
+  design; the forks' reported drops came largely from weaker models. Our claim there is
+  safety (asking instead of guessing, no wrong reuse) and flat cost, not accuracy.
+- The accuracy gap opens with scale: today's design degrades and becomes very expensive;
+  ours does not.
+- Small cells are marked (n=10 for OpenPoke today at 20,000). Synthetic scenarios; the
+  `irreversible` and family labels come from the generator.
 
 ## Assumptions
 

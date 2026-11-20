@@ -7,6 +7,12 @@
 > draft and contact ids, and **asks the user** instead of guessing when a step that cannot
 > be undone is ambiguous. Everything older is one `search_agents` call away.
 >
+> **Held-out results (Haiku 5.5):** the same accuracy as today's OpenPoke up to 1,000 agents,
+> then **+10 points at 5,000 and +40 at 20,000** (today's design collapses to 60% and costs
+> $0.44 a turn; ours stays at ~95% and $0.002). At every size it **asks when a request is truly
+> ambiguous (100% vs 33–83%)** and makes **no wrong-agent reuses**, for 4% over-asking.
+> Sonnet 5.5 and GPT-6.1 confirm the pattern; see the write-up.
+>
 > - Write-up, method and results: [`docs/agent-overload.md`](docs/agent-overload.md)
 > - What other forks built, and where it stopped working: [`docs/research/2026-11-20-fork-survey.md`](docs/research/2026-11-20-fork-survey.md)
 > - Design and plan: [`docs/superpowers/specs/`](docs/superpowers/specs/), [`docs/superpowers/plans/`](docs/superpowers/plans/)
