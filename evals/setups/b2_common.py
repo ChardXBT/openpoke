@@ -22,6 +22,7 @@ from typing import Callable, Optional
 
 from evals.harness.transcript import render_current_turn, render_history
 from evals.schema import PreparedTurn, Scenario, World, WorldAgent
+from server.services.execution.working_set import STATE_LABELS
 
 _EMBEDDING_MODEL = "text-embedding-3-small"
 _EMBEDDING_CACHE_DIR = Path(__file__).parents[1] / ".cache" / "embeddings"
@@ -75,9 +76,14 @@ def _relative_age(now: str, then: str) -> str:
 
 
 def _format_card(agent: WorldAgent, now: str) -> str:
+    # Same status text as B1 and Ours (state label, note or topic, archived flag), so B2 is
+    # not judged on thinner cards than the setups it is compared with.
+    label = STATE_LABELS.get(agent.state, agent.state)
+    detail = agent.state_note or agent.topic
+    status = f"{'archived, ' if agent.archived else ''}{label}" + (f": {detail}" if detail else "")
     return (
-        f"#{agent.id} {escape(agent.name, quote=True)} · "
-        f"{escape(agent.state_note, quote=True)} · "
+        f"#{agent.id} {escape(agent.name, quote=False)} · "
+        f"{escape(status, quote=False)} · "
         f"last active {_relative_age(now, agent.last_active_at)}"
     )
 
@@ -120,6 +126,8 @@ class B2Common:
         self.k = k
         self.recent = recent
         self.embeddings = embeddings
+        # Rows must say which B2 ran: lexical-only is a weaker baseline, not the same one.
+        self.name = "b2_common" if embeddings else "b2_common-lexical"
         self.embedder = embedder or self._openai_embed
         self.dup_threshold = (
             _DEFAULT_DUP_THRESHOLD if dup_threshold is None else dup_threshold

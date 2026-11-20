@@ -98,7 +98,7 @@ def test_topk_contains_gold_for_needle(tmp_path):
     )
 
     assert _card_lines(prepared) == [
-        "#2 Tokyo ramen research · Shortlist includes the distinctive word yuzu · last active 2h ago"
+        "#2 Tokyo ramen research · waiting on you: Shortlist includes the distinctive word yuzu · last active 2h ago"
     ]
 
 
@@ -136,7 +136,7 @@ def test_message_layout_matches_upstream(tmp_path):
     expected = (
         f"<conversation_history>\n{render_history(history, _world())}\n</conversation_history>\n\n"
         "<agents>\n"
-        "#2 Tokyo ramen research · Shortlist includes the distinctive word yuzu · last active 2h ago\n"
+        "#2 Tokyo ramen research · waiting on you: Shortlist includes the distinctive word yuzu · last active 2h ago\n"
         "</agents>\n\n"
         "<new_user_message>\nShow me the yuzu option\n</new_user_message>"
     )
@@ -154,7 +154,7 @@ def test_search_tool_returns_cards(tmp_path):
 
     assert result == {
         "agents": [
-            "#3 Invoice follow-up · Waiting for Bob&#x27;s payment date · last active 3h ago"
+            "#3 Invoice follow-up · waiting on you: Waiting for Bob's payment date · last active 3h ago"
         ]
     }
 
@@ -218,3 +218,24 @@ def test_embedding_cache_used(tmp_path, monkeypatch):
     assert seen == first_seen
     assert Counter(seen).most_common(1)[0][1] == 1
     assert len(list(cache_dir.glob("*.json"))) == len(set(seen))
+
+
+def test_lexical_b2_is_labelled_apart_from_embedding_b2():
+    """Without OPENAI_API_KEY, `--setups b2` silently ran lexical-only under the same
+    name, so rows could not say which B2 was measured and the two would merge."""
+    from evals.setups.b2_common import B2Common
+
+    assert B2Common(embeddings=True, embedder=lambda texts: [[1.0] for _ in texts]).name == "b2_common"
+    assert B2Common(embeddings=False).name == "b2_common-lexical"
+
+
+def test_b2_cards_carry_state_topic_and_archived_like_b1(tmp_path):
+    """A done agent with no note rendered as just '#id name ·  · age': no state, no topic, no
+    archived flag, although B1 and Ours show all three. Most needle targets look like that."""
+    from evals.setups.b2_common import _format_card
+
+    old = WorldAgent(id=9, name="Japan visa paperwork", topic="Collect documents for the Japan visa",
+                     created_at="2026-08-01T09:00:00Z", last_active_at="2026-09-01T09:00:00Z",
+                     state="done", state_note="", refs=[], archived=True)
+    card = _format_card(old, "2026-11-20T15:00:00Z")
+    assert "archived, done: Collect documents for the Japan visa" in card
