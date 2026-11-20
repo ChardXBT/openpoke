@@ -265,10 +265,36 @@ def _word_hit(token: str, words: set[str]) -> bool:
     return any(len(w) >= 4 and (w.startswith(token) or token.startswith(w)) for w in words)
 
 
+# Words that say what to do, or ask how a matter is going, not what it is about: they can't tell
+# one matter from another ("did omar ever pay", "any movement on the alice thing").
+_ACTION_WORDS = frozenset(
+    "approve approved nudge chase follow check stop cancel push move forward remind reminder schedule book "
+    "call confirm confirmed ping see find look looks good great fine okay sure ahead ship write prep prepare "
+    "set change make add remove delete again quick quickly ever movement progress status happening going "
+    "pay paid paying respond responded answer answered sign signed agree agreed accept accepted decide decided "
+    "ask asking asked gotten heard hear word anything note notes mail letter text".split()
+)
+
+
+def _topic_tokens(text: str, exclude: Iterable[str] = ()) -> list[str]:
+    """Stemmed content words that could say which matter is meant (no names, actions or status words)."""
+    skip = set(exclude)
+    return [_stem(t) for t in _content_tokens(text)
+            if t not in skip and t not in _ACTION_WORDS and _stem(t) not in _ACTION_WORDS]
+
+
+def _off_topic(reg: AgentRegistry, ids: list[int], text: str, exclude: Iterable[str] = ()) -> bool:
+    """The message says what it is about, and that fits none of these items ("ask alice if thursday
+    lunch works" when Alice's only open item is the Q3 deck): it is other work for the same person."""
+    tokens = _topic_tokens(text, exclude)
+    if not tokens:
+        return False
+    return not any(_word_hit(t, _agent_words(reg, rec)) for rec in reg.get_many(ids) for t in tokens)
+
+
 def _narrow_by_detail(reg: AgentRegistry, ids: list[int], text: str, exclude: Iterable[str] = ()) -> list[int]:
     """Keep the single candidate whose words best match the message's content words, if unique."""
-    skip = set(exclude)
-    tokens = [_stem(t) for t in _content_tokens(text) if t not in skip]
+    tokens = _topic_tokens(text, exclude)
     if len(ids) < 2 or not tokens:
         return ids
     scores = []
@@ -398,6 +424,11 @@ def _entity(reg: AgentRegistry, text: str) -> Resolution:
     if not open_agents:
         return UNRESOLVED
     open_agents.sort(key=lambda r: r.last_active_at, reverse=True)
+    # New work for someone who has open items is not one of them. Kept for an irreversible step
+    # with several candidates: asking which one is the safe outcome there.
+    if _off_topic(reg, [r.id for r in open_agents], text, name_tokens) and (
+            len(open_agents) == 1 or not is_irreversible(text)):
+        return UNRESOLVED
     # Topic words first: they are the strongest evidence of which matter is meant.
     ids = _narrow_by_detail(reg, [r.id for r in open_agents], text, exclude=name_tokens)
     if len(ids) > 1:

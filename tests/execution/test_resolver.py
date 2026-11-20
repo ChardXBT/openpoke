@@ -256,3 +256,50 @@ def test_event_email_text_cannot_pick_a_person(reg):
     event = EventMeta(kind="email", thread_id="thr_x", sender="mallory@evil.example", subject="hi")
     assert resolve(reg, "Bob invoice follow-up", "", event=event).kind == "unresolved"
     assert resolve(reg, "Bob Stone says send it", "", event=event).kind == "unresolved"
+
+
+def test_new_work_for_a_person_is_not_their_only_open_item(tmp_path):
+    """Live demo bug: 'ask alice if thursday lunch works' reused Alice's Q3-deck agent."""
+    r = AgentRegistry(tmp_path / "one.db", clock=lambda: NOW)
+    r.bulk_insert(
+        [_rec(1, "Alice Chen – Q3 deck comments", "waiting_on_user",
+              'draft to alice.chen@acme.com re "Q3 deck comments" awaiting your OK', "Draft Alice a note about the Q3 deck")],
+        {1: [Ref("contact", "alice.chen@acme.com"), Ref("contact_name", "Alice Chen")]},
+    )
+    assert resolve(r, "ask alice if thursday lunch works").kind == "unresolved"
+    assert resolve(r, "email alice asking if she'd come on our podcast in january").kind == "unresolved"
+    # Questions and steps about the matter itself still resolve to it.
+    for message in ("did alice reply?", "has alice gotten back yet", "alice wants the deck shorter", "send alice's draft"):
+        assert resolve(r, message).candidates == [1], message
+
+
+def test_status_words_are_not_topics(reg):
+    assert resolve(reg, "did bob ever pay").candidates == [3]
+    # "confirm" must not prefix-match an unrelated item; "lunch" decides.
+    assert resolve(reg, "did alice confirm lunch yet").candidates == [2]
+
+
+def test_off_topic_irreversible_step_keeps_the_old_path(reg):
+    # Several items for Alice and a step that can't be undone: the off-topic rule stays out of it,
+    # and "send" narrows to her only draft as before (the send guard then confirms the target).
+    assert resolve(reg, "send alice the contract").candidates == [1]
+    assert resolve(reg, "has alice heard back about anything").kind != "unresolved"
+
+
+def test_generic_words_like_note_do_not_tie(tmp_path):
+    """Live demo: 'looks good, send the lunch note' asked 'lunch or deck?' because both drafts' notes said "note"."""
+    r = AgentRegistry(tmp_path / "two.db", clock=lambda: NOW)
+    r.bulk_insert(
+        [_rec(2, "Alice Chen – Q3 deck comments", "waiting_on_user", 'draft to alice.chen@acme.com re "Q3 deck comments" awaiting your OK',
+              "Draft a short note asking Alice for Q3 deck comments", days=0.02),
+         _rec(3, "Alice Chen – Thursday lunch", "waiting_on_user", 'draft to alice.chen@acme.com re "Lunch on Thursday" awaiting your OK',
+              "Draft a short note asking Alice about Thursday lunch", days=0.01)],
+        {2: [Ref("draft", "dr_2")], 3: [Ref("draft", "dr_3")]},
+    )
+    shown = "\n".join([
+        _agent_msg("2026-11-20 14:59:00", "[SUCCESS] Alice Chen – Q3 deck comments: Draft dr_2 ready",
+                   "[SUCCESS] Alice Chen – Thursday lunch: Draft dr_3 ready"),
+        '<poke_reply timestamp="2026-11-20 14:59:30">both are ready to send</poke_reply>',
+    ])
+    assert resolve(r, "looks good, send the lunch note", shown).candidates == [3]
+    assert resolve(r, "send it", shown).kind == "ambiguous"
