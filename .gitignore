@@ -48,3 +48,6 @@ server/plans/
 # Eval caches (model list, prices, embeddings) and scratch runs
 evals/.cache/
 evals/runs/
+
+# Local Claude Code preview config
+.claude/
