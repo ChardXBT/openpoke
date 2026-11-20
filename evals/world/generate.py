@@ -9,7 +9,8 @@ A world is a snapshot of one user's execution-agent registry at ``NOW``:
 Pure stdlib and deterministic: string seeds go through ``random.Random``'s sha512
 seeding, so results do not depend on PYTHONHASHSEED or the platform.
 
-CLI: ``python -m evals.world.generate --size N --seed S`` prints counts by state.
+CLI: ``python -m evals.world.generate --size N --seed S`` prints counts by state and,
+for seeds with a scenario split, by scenario family.
 """
 
 from __future__ import annotations
@@ -749,7 +750,16 @@ def build_world(size: int, seed: int) -> World:
 
 # --------------------------------------------------------------------------- CLI
 
+FAMILY_NAMES = {
+    1: "needle", 2: "same person, other topic", 3: "conversational reference", 4: "true ambiguity",
+    5: "looks ambiguous, is clear", 6: "new task with look-alikes", 7: "cross-client", 8: "inbound email",
+    9: "archived resurrection", 10: "repeat after clarification",
+}
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
+    from evals.world.scenarios import SPLIT_BY_SEED, build_scenarios
+
     parser = argparse.ArgumentParser(description="Print counts for a synthetic agent world.")
     parser.add_argument("--size", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
@@ -763,6 +773,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     for state in ("running", "waiting_on_user", "waiting_on_others", "scheduled", "done", "failed"):
         print(f"{state:<20}{states[state]:>8}{archived[state]:>10}")
     print(f"{'total':<20}{world.size:>8}{sum(archived.values()):>10}")
+
+    if args.seed not in SPLIT_BY_SEED:
+        print(f"no scenario split for seed {args.seed} (dev = 1, heldout = 2)")
+        return
+    scenarios = build_scenarios(world)
+    families = Counter(scenario.family for scenario in scenarios)
+    print(f"scenarios split={SPLIT_BY_SEED[args.seed]} total={len(scenarios)}")
+    for family in range(1, 11):
+        print(f"family {family:>2} {FAMILY_NAMES[family]:<28}{families[family]:>4}")
 
 
 if __name__ == "__main__":

@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from evals.world.generate import build_world
+    from evals.world.scenarios import build_scenarios
 
-__all__ = ["build_world"]
+__all__ = ["build_scenarios", "build_world"]
 
 
 def __getattr__(name: str) -> Any:
@@ -16,4 +17,8 @@ def __getattr__(name: str) -> Any:
         from evals.world.generate import build_world
 
         return build_world
+    if name == "build_scenarios":
+        from evals.world.scenarios import build_scenarios
+
+        return build_scenarios
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
