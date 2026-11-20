@@ -38,7 +38,8 @@ def open_agents() -> dict:
 
 @router.get("/me")
 def about_me() -> dict:
-    return {"facts": [{"kind": f.kind, "subject": f.subject, "value": f.value, "email": f.email, "since": f.created_at}
+    return {"facts": [{"kind": f.kind, "subject": f.subject, "value": f.value, "email": f.email, "since": f.created_at,
+                       "until": f.invalid_at}
                       for f in get_profile_store().current()]}
 
 
@@ -52,6 +53,7 @@ class IncomingEmail(BaseModel):
     subject: str
     body: str
     thread_id: str | None = None
+    reply_to_last: bool = False  # thread it onto the last email you sent this sender
 
 
 def _require_demo() -> None:
@@ -61,12 +63,26 @@ def _require_demo() -> None:
 
 @router.post("/demo/email")
 async def deliver_email(payload: IncomingEmail) -> dict:
+    """Deliver an email and hand it to Poke as an important-email notification right away.
+
+    The real watcher first asks a model whether the email matters; a demo can't depend on that
+    call, so this skips only the classification. Everything after it is the real path: the
+    notification carries the thread id and sender, and the router wakes the agent that owns the
+    thread (or the one waiting on that sender) instead of spawning a new one.
+    """
     _require_demo()
     from ..services.gmail.demo_mailbox import get_demo_mailbox
     from ..services.gmail.importance_watcher import get_important_email_watcher
+    from ..services.gmail.processing import parse_gmail_fetch_response
 
-    message = get_demo_mailbox().inject(payload.sender, payload.subject, payload.body, payload.thread_id)
-    asyncio.get_running_loop().create_task(get_important_email_watcher()._poll_once())  # check the inbox now
+    message = get_demo_mailbox().inject(payload.sender, payload.subject, payload.body, payload.thread_id,
+                                        reply_to_last=payload.reply_to_last)
+    emails, _ = parse_gmail_fetch_response({"successful": True, "data": {"messages": [message]}}, query="demo")
+    watcher = get_important_email_watcher()
+    if emails:
+        watcher._seen_store.mark_seen([emails[0].id])  # the background poll must not surface it twice
+        summary = f"{payload.sender} wrote ({message['subject']}): {payload.body}"
+        asyncio.get_running_loop().create_task(watcher._dispatch_summary(summary, emails[0]))
     return {"delivered": message["messageId"], "thread_id": message["threadId"]}
 
 

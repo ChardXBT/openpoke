@@ -88,3 +88,14 @@ def test_demo_routes(tmp_path, monkeypatch):
     finally:
         _override.reset(token)
         set_agent_registry(None)
+
+
+def test_reply_to_last_threads_onto_what_you_sent(tmp_path):
+    box = DemoMailbox(tmp_path / "box.json")
+    draft = box.execute("GMAIL_CREATE_EMAIL_DRAFT", {"recipient_email": "alice.chen@acme.com", "subject": "Thursday lunch", "body": "Free?"})
+    sent = box.execute("GMAIL_SEND_DRAFT", {"draft_id": draft["data"]["id"]})
+    reply = box.inject("Alice Chen <alice.chen@acme.com>", "Re: Lunch Thursday?", "Yes!", reply_to_last=True)
+    assert reply["threadId"] == sent["data"]["threadId"] and reply["subject"] == "Re: Thursday lunch"
+    # Nobody emailed Bob: his email threads by subject as before.
+    bob = box.inject("Bob Stone <bob@northwind.com>", "Re: Invoice #402", "Got it?", reply_to_last=True)
+    assert bob["threadId"] == "thr_bob_402"

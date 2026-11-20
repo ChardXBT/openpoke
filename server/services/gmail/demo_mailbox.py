@@ -97,9 +97,19 @@ class DemoMailbox:
         return dict(self._state.get("drafts", {}))
 
     # ------------------------------------------------------------------ demo controls
-    def inject(self, sender: str, subject: str, body: str, thread_id: Optional[str] = None) -> dict:
-        """Deliver an incoming email (for showing the watcher and reply routing)."""
+    def inject(self, sender: str, subject: str, body: str, thread_id: Optional[str] = None,
+               reply_to_last: bool = False) -> dict:
+        """Deliver an incoming email (for showing the watcher and reply routing).
+
+        ``reply_to_last``: when you have emailed this sender, the email is their reply on the thread
+        of the last one you sent them (subject "Re: ..."), the way a real reply arrives.
+        """
         with self._lock:
+            if reply_to_last and not thread_id:
+                sent = [m for m in self.messages() if "SENT" in m["labelIds"] and _address(m["to"]) == _address(sender)]
+                if sent:
+                    thread_id = sent[0]["threadId"]
+                    subject = "Re: " + re.sub(r"^(re|fwd?):\s*", "", sent[0]["subject"], flags=re.I)
             if not thread_id:
                 base = re.sub(r"^(re|fwd?):\s*", "", subject or "", flags=re.I).strip().casefold()
                 thread_id = next((m["threadId"] for m in self._state["messages"]
