@@ -1,0 +1,322 @@
+{
+  "b0_names|anthropic/claude-haiku-5.5|30": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.967741935483871,
+    "accuracy_ci": [
+      0.9032258064516129,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 0.6666666666666666,
+    "over_ask_rate": 0.0,
+    "missed_ask_rate": 0.3333333333333333,
+    "prompt_tokens_mean": 13480.387096774193,
+    "latency_p50": 3.697,
+    "latency_p95": 6.337,
+    "cost_per_turn": 0.0015772903225806452,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 0.667,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b0_names|anthropic/claude-haiku-5.5|1000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 1.0,
+    "accuracy_ci": [
+      1.0,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.0,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 45403.354838709674,
+    "latency_p50": 3.775,
+    "latency_p95": 15.422,
+    "cost_per_turn": 0.004786516129032258,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b2_common|anthropic/claude-haiku-5.5|30": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.967741935483871,
+    "accuracy_ci": [
+      0.9032258064516129,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.03571428571428571,
+    "false_reuse_rate": 0.3333333333333333,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.0,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 14756.774193548386,
+    "latency_p50": 3.232,
+    "latency_p95": 7.084,
+    "cost_per_turn": 0.0017072258064516129,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b2_common|anthropic/claude-haiku-5.5|1000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.9032258064516129,
+    "accuracy_ci": [
+      0.7741935483870968,
+      1.0
+    ],
+    "duplicate_rate": 0.04,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 0.6666666666666666,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.3333333333333333,
+    "prompt_tokens_mean": 15505.161290322581,
+    "latency_p50": 3.648,
+    "latency_p95": 5.982,
+    "cost_per_turn": 0.0018073870967741936,
+    "by_family": {
+      "1": 0.667,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 0.667,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b2_common|anthropic/claude-haiku-5.5|5000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.9032258064516129,
+    "accuracy_ci": [
+      0.7741935483870968,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 0.3333333333333333,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.6666666666666666,
+    "prompt_tokens_mean": 15705.41935483871,
+    "latency_p50": 3.268,
+    "latency_p95": 5.812,
+    "cost_per_turn": 0.0018176129032258066,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 0.333,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b2_common|anthropic/claude-haiku-5.5|20000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.8709677419354839,
+    "accuracy_ci": [
+      0.7419354838709677,
+      0.967741935483871
+    ],
+    "duplicate_rate": 0.04,
+    "wrong_reuse_rate": 0.03571428571428571,
+    "false_reuse_rate": 0.3333333333333333,
+    "clarify_recall": 0.6666666666666666,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.3333333333333333,
+    "prompt_tokens_mean": 16267.516129032258,
+    "latency_p50": 6.752,
+    "latency_p95": 14.854,
+    "cost_per_turn": 0.0018963225806451613,
+    "by_family": {
+      "1": 1.0,
+      "2": 0.667,
+      "3": 1.0,
+      "4": 0.667,
+      "5": 1.0,
+      "6": 0.333,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "ours|anthropic/claude-haiku-5.5|30": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 1.0,
+    "accuracy_ci": [
+      1.0,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.0,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 17356.58064516129,
+    "latency_p50": 2.599,
+    "latency_p95": 4.748,
+    "cost_per_turn": 0.0019271935483870966,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "ours|anthropic/claude-haiku-5.5|1000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.9354838709677419,
+    "accuracy_ci": [
+      0.8387096774193549,
+      1.0
+    ],
+    "duplicate_rate": 0.04,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 18860.83870967742,
+    "latency_p50": 2.846,
+    "latency_p95": 5.301,
+    "cost_per_turn": 0.0020921290322580646,
+    "by_family": {
+      "1": 0.667,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "ours|anthropic/claude-haiku-5.5|5000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.9354838709677419,
+    "accuracy_ci": [
+      0.8387096774193549,
+      1.0
+    ],
+    "duplicate_rate": 0.04,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 19609.612903225807,
+    "latency_p50": 3.288,
+    "latency_p95": 6.015,
+    "cost_per_turn": 0.0021869999999999997,
+    "by_family": {
+      "1": 0.667,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "ours|anthropic/claude-haiku-5.5|20000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 1.0,
+    "accuracy_ci": [
+      1.0,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.0,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 21169.612903225807,
+    "latency_p50": 3.494,
+    "latency_p95": 6.08,
+    "cost_per_turn": 0.00237458064516129,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  }
+}

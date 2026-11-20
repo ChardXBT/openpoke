@@ -63,6 +63,9 @@ cases, including updates, retirements, end dates, pronouns and injection attempt
 
 ## 4. See what it's tracking
 
+In the web app, the panel beside the chat shows both live: what Poke knows about you (click ✕ to
+forget a fact) and its open items. The same data is available over HTTP:
+
 | Endpoint | What you get |
 |---|---|
 | `GET /api/v1/me` | everything Poke has learned about you |

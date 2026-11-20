@@ -1,0 +1,4 @@
+{"model": "anthropic/claude-haiku-5.5", "setups": ["b0_names", "b2_common", "ours"], "sizes": [30, 1000], "out": "evals/runs/heldout2-haiku-small", "code": "7b6ecfa5f3dd", "started": "2026-11-20T14:22:34"}
+{"model": "anthropic/claude-haiku-5.5", "setups": ["b2_common", "ours"], "sizes": [5000, 20000], "out": "evals/runs/heldout2-haiku-large", "code": "7b6ecfa5f3dd", "started": "2026-11-20T14:24:19"}
+{"model": "openai:gpt-6.1-terra", "setups": ["b0_names", "b2_common", "ours"], "sizes": [30, 1000], "out": "evals/runs/heldout2-gpt-small", "code": "7b6ecfa5f3dd", "started": "2026-11-20T14:32:08"}
+{"model": "openai:gpt-6.1-terra", "setups": ["b2_common", "ours"], "sizes": [5000, 20000], "out": "evals/runs/heldout2-gpt-large", "code": "7b6ecfa5f3dd", "started": "2026-11-20T14:34:29"}

@@ -98,3 +98,79 @@ Sonnet 5.5 is strong enough that B0 holds 97% at 1,000 agents on these held-out 
 Ours is 94% / 90%. Read honestly: at ≤1,000 agents with a strong model, Ours is a cost and
 safety improvement, not an accuracy one. The ablation finding (resolver off scored higher)
 is checked against Ours on final code in queue 2 before drawing conclusions.
+
+## Final queue 4 (13:47–14:08), code 78031cd → b26694c (post-tuning)
+
+Held-out runs here are **post-tuning** (review finding 14): the seed-2 misses were read at
+12:52 and the code changed afterwards. They are reported as such, never as the headline.
+During the queue, the commit changed to `4355a88` (demo mailbox) and then `b26694c` (memory).
+Neither touches anything the eval setups use: the setups run with an empty, isolated profile.
+
+| Run | Model | Result | Cost |
+|---|---|---|---|
+| external-haiku-final | Haiku | Kareem 105: B0 88%, B2 81%, Ours **94%**. draggle 72: B0 74%, B2 67%, Ours 67% | $1.07 |
+| dev-haiku-final | Haiku | 1,000 agents: B2 90%, Ours **97%** (ask recall 75% vs 100%) | $0.29 |
+| heldout-haiku-post | Haiku | 1,000 agents: B2 90%, Ours **100%** | $0.12 |
+| external-gpt-final | GPT-6.1 | Kareem: B0 86%, B2 91%, Ours **98%**. draggle: B0 72%, B2 79%, Ours 75% | $7.48 |
+| heldout-gpt-post | GPT-6.1 | 30 / 1,000 agents: B0 87% / 94%, B2 71% / 81%, Ours **97%** / 90% | $3.12 |
+| heldout-gpt-post-5k | GPT-6.1 | 5,000 agents: B2 77%, Ours **94%** | $0.80 |
+| heldout-gpt-b0-20k | GPT-6.1 | B0 at 20,000, `--sample 12` (evenly spaced, every family): cap after 5 turns, 5/5 correct, **$0.79/turn, 789k prompt tokens/turn** | $5.53 |
+| dev-gpt-final | GPT-6.1 | 30 agents: B0 91%, B2 88%, Ours **96%**. At 1,000 agents only B0 finished (87%, n=30) before the $4 cap | $4.04 |
+
+draggle, read closely: its gold expects a dispatch on every query. 10 (Haiku) and 4 (GPT)
+of Ours' misses, and 13 / 7 of B2's, are replies given straight from the agent's card with
+content that matches the gold agent's notes. Crediting those: B0 74% / 72%, B2 **85% / 89%**,
+Ours 81% / 81%. On draggle's 50-agent test, the common fork answer is the best design.
+
+## Personal memory eval (14:08–14:20)
+
+`evals/memory/`: one extraction per case through the product's `build_extraction_messages` and
+`apply_extraction` with an in-memory store, then the profile is checked. v1 is the learner prompt
+before this work, frozen verbatim in the eval (checked against `git show`). 3 reps per case.
+
+- **memory-1** (51 dev cases, v2 as first written): v1 76–78% → v2 92–98%; false writes 0%. $0.19.
+- Misses read, then fixed (this makes the 51 cases *dev*):
+  - Luna ignored "yes please" to Poke's own "should I remember…?".
+  - Luna dropped a lasting fact inside a request ("call my dad Mike").
+  - Models copied the display form "gym (routine)" as a subject.
+- Grader changes, both after reading run 1:
+  - `gone` checks only the starting subjects. All three models correctly retired the job and
+    added "time off after leaving Shopify", which the old check failed.
+  - c2 no longer requires saving an address that appeared only in Poke's message. The address
+    came from an email, and the models were right to refuse it: a spoofed sender must not
+    become "my dentist".
+- **memory-2-dev**: v2 99–100% (v1 76–77%). $0.21.
+- **memory-heldout**: 20 new cases written after that tuning, frozen by sha256 in `3ff6ec7`
+  before the run, and run once: **v1 63–68% → v2 97–100%**, false writes 7% → 0% (Luna). $0.09.
+
+## heldout2: the fresh split, run once (14:22–14:37), code 7b6ecfa5 (freeze commit 29d59d2)
+
+Written after all tuning. Frozen with its scenario digest and a routing-code digest before any
+run, and the runner logged each cell to `heldout2.runs.jsonl`.
+
+| Run | Model | Result | Cost |
+|---|---|---|---|
+| heldout2-haiku-small | Haiku | 30 / 1,000 agents: B0 97% / **100%**, B2 97% / 90%, Ours **100%** / 94% | $0.43 |
+| heldout2-haiku-large | Haiku | 5,000 / 20,000 agents: B2 90% / 87%, Ours **94% / 100%** (paired +13 [+3, +26] at 20,000) | $0.26 |
+| heldout2-gpt-small | GPT-6.1 | 30 / 1,000 agents: B0 87% / 81%, B2 90% / 84%, Ours **100% / 90%** | $3.19 |
+| heldout2-gpt-large | GPT-6.1 | 5,000 agents: B2 84%, Ours **90%**. The 20,000 cell never started: the process was killed by a session restart at 14:37. Its summary was rebuilt from `rows.jsonl` | $1.68 |
+
+Ours' Haiku misses at 1,000 agents: a paraphrase the lexical search missed ("paying twice" vs
+*Subscription Audit*), and an over-ask on the day of a monthly reminder. Not tuned on.
+
+## Live demo and post-run fixes (14:40–15:20), commits 9a81406, 40c54d7, cc2a15b
+
+The demo ran end to end through the API and then the web UI, with the demo mailbox on GPT-6.1,
+for about $1.5 in total. It found:
+
+1. **"ask alice if thursday lunch works" reused Alice's Q3-deck agent.** The entity rule returned
+   the person's only open item without checking the topic. Fixed: no claim when the topic words
+   fit none of the person's open items. Action and status words are ignored ("confirm" had matched
+   "Conf"; "note" tied two drafts and made "send the lunch note" ask).
+2. **A reply never closed the item that was waiting on it.** Fixed via the thread id.
+3. **The demo email button depended on the importance model**, which once judged a lunch reply
+   not important. The demo now hands the email to Poke directly; the real watcher is unchanged.
+
+Offline resolver check (no model; the resolver against gold on all 140 scenarios at 30, 1,000 and
+20,000 agents): wrong calls dev 4 → 0 and heldout2 2 → 0; right calls dev 53 → 54, heldout 22 → 22,
+heldout2 19 → 20. This uses heldout2, so heldout2 is no longer clean for future resolver changes.

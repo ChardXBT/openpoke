@@ -1,6 +1,7 @@
 # Clean-machine verification of `agent-overload`
 
 Date: 2026-11-20. Branch verified: `agent-overload` @ `4a351e5` (PR #1).
+_Historical record of that commit. The suite has grown since (262 tests on `main`); the setup steps still apply._
 Machine: fresh Linux (Ubuntu 24.04, kernel 6.1, 4 vCPU), Python 3.12.3, Node 22.23.5, npm 10.9.9.
 No API keys or tokens in the environment; `.env` was copied from `.env.example` with
 its placeholder values only. No LLM or paid API was called; nothing was spent.
