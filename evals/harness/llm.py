@@ -102,14 +102,32 @@ class LLMResult:
     latency_s: float
 
 
-async def _httpx_transport(url: str, headers: dict, payload: dict) -> tuple[int, dict]:
-    async with httpx.AsyncClient(timeout=120.0) as client:
+class _PooledTransport:
+    """One shared AsyncClient per event loop.
+
+    Creating an AsyncClient builds an SSL context and loads the CA bundle
+    synchronously (~0.7 s on Windows), which serialized "parallel" calls when a
+    fresh client was made per request.
+    """
+
+    def __init__(self) -> None:
+        self._clients: dict[int, httpx.AsyncClient] = {}
+
+    async def __call__(self, url: str, headers: dict, payload: dict) -> tuple[int, dict]:
+        loop_id = id(asyncio.get_running_loop())
+        client = self._clients.get(loop_id)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(timeout=120.0, limits=httpx.Limits(max_connections=64))
+            self._clients[loop_id] = client
         response = await client.post(url, headers=headers, json=payload)
         try:
             body = response.json()
         except Exception:
             body = {"error": response.text[:500]}
         return response.status_code, body
+
+
+_httpx_transport = _PooledTransport()
 
 
 def provider_of(model: str) -> str:

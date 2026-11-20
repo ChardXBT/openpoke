@@ -34,8 +34,10 @@ used the product.
 - Duplicate: a follow-up spawns a fresh agent that has forgotten the thread.
 - Misroute: a follow-up lands on the wrong agent (worst case: sends the wrong draft).
 - Silent guess: two things match and the assistant picks one without asking.
-- Bloat: the roster grows until the call is slow, costly, then overflows the context
-  window (~15–18k agents at today's ~10 tokens per name).
+- Bloat: the roster grows without bound: ~10 tokens per bare name, ~35 per name with a
+  description, resent on every loop iteration. Current 1M-token models still fit 20,000
+  names (~200k tokens), so the cost is money, latency and accuracy rather than a hard
+  overflow (correction made during the build; an earlier draft assumed a 200k window).
 
 ## 2. Goals, non-goals, anti-goals
 
@@ -69,8 +71,9 @@ Anti-goals
   keys without the owner's explicit OK.
 - The brief allows vendoring: the eval imports the fork's real prompt builder and tool
   schemas; only the LLM call is live; Gmail tools are stubbed.
-- OpenPoke's configured model (`anthropic/claude-sonnet-4`) may no longer be served;
-  check OpenRouter's model list at setup and record the substitute.
+- OpenPoke's configured model (`anthropic/claude-sonnet-4`) is no longer served on
+  OpenRouter (checked 2026-11-20). Default is now `anthropic/claude-sonnet-5.5`
+  (`OPENPOKE_MODEL` overrides); dev runs use `anthropic/claude-haiku-5.5`.
 - Windows dev machine: `roster.py` imports `fcntl` (Unix-only). We make it portable.
 - Scenarios are synthetic. Mitigations: a held-out set from a separate seed, frozen by
   hash before the first run of our system; scenario families fixed before tuning; the
@@ -241,8 +244,9 @@ from routing.
 that agent; unknown name → NEW); no dispatch plus a user-facing question → ASK; anything
 else → OTHER (wrong).
 
-**Sizes**: 10, 50, 200, 1,000, 5,000, 20,000. Setups that do not fit the context window
-are recorded as "does not fit" from computed token counts. Large B1 cells are subsampled.
+**Sizes**: 30, 200, 1,000, 5,000, 20,000 (30 is the number of core agents scenarios depend
+on). Setups that do not fit the context window are recorded as "does not fit" from
+computed token counts. Large B1 cells are subsampled.
 
 **Metrics**: routing accuracy; duplicate rate; wrong-reuse rate (overall and
 cross-person/client); clarify recall (asked when gold is ASK) and over-ask rate (asked
