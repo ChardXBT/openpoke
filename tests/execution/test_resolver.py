@@ -224,3 +224,20 @@ def test_hint_text(reg):
 def test_never_raises_on_garbage(reg):
     for text in ["", "   ", "#", "#99999999", "@@@", "<agent_message>", "[SUCCESS] : :"]:
         resolve(reg, text, "<agent_message timestamp=\"x\">[SUCCESS] nobody: hi</agent_message>")
+
+
+def test_ambiguous_person_resolves_to_the_item_just_discussed(reg):
+    # Two open Alice items; only the lunch thread was discussed in the recent conversation.
+    res = resolve(reg, "what's going on with alice", LUNCH_SENT)
+    assert (res.kind, res.candidates, res.rule) == ("resolved", [2], "recent")
+
+
+def test_two_items_discussed_stay_ambiguous(reg):
+    both = TWO_DRAFTS.replace("Bob invoice follow-up", "Alice – lunch Thursday")
+    res = resolve(reg, "what's going on with alice", both)
+    assert res.kind == "ambiguous"
+
+
+def test_ambiguous_hint_lets_the_conversation_decide(reg):
+    hint = render_hint(reg, resolve(reg, "what's going on with alice", ""))
+    assert "already shows which one" in hint

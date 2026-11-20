@@ -427,6 +427,12 @@ def resolve(
                     if both:
                         return _single_or_ambiguous(both, res.reason, "reference")
                 return res
+        if named.kind == "ambiguous":
+            # Several items for this person, but only one is what the conversation was just
+            # about (often the one the user picked when Poke last asked): that is the one meant.
+            recent = [c for c in named.candidates if c in surfaced_agents(reg, transcript)]
+            if len(recent) == 1:
+                return Resolution("resolved", recent, "it is the one the conversation was just about", "recent")
         return named
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(f"resolver: falling back to unresolved: {exc}")
@@ -450,8 +456,9 @@ def render_hint(reg: AgentRegistry, res: Resolution) -> str:
         return f"Likely about {_short(recs[0])}. Why: {res.reason}. Reuse this agent for it."
     options = "; ".join(_short(r) for r in recs[:4])
     return (
-        f"Ambiguous: this could be {options}. Before anything is sent, replied, forwarded, deleted or "
-        "cancelled, ask the user which one in one short question."
+        f"Ambiguous: this could be {options}. If the conversation already shows which one the user "
+        "means, use it. Otherwise, before anything is sent, replied, forwarded, deleted or cancelled, "
+        "ask the user which one in one short question."
     )
 
 
