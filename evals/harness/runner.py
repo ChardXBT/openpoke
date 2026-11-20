@@ -176,6 +176,7 @@ async def run(
     concurrency: int = 8,
     limit: Optional[int] = None,
     families: Optional[set[int]] = None,
+    sample: Optional[int] = None,
     world_factory: Optional[Callable[[int, int], World]] = None,
     scenario_factory: Optional[Callable[[World], list[Scenario]]] = None,
     log: Callable[[str], None] = print,
@@ -223,6 +224,11 @@ async def run(
         scenarios = [s for s in all_scenarios if not families or s.family in families]
         if limit:
             scenarios = scenarios[:limit]
+        if sample and sample < len(scenarios):
+            # Evenly spaced across the list (which is ordered by family), so every family is
+            # represented; --limit takes the first N and covers only the first families.
+            step = len(scenarios) / sample
+            scenarios = [scenarios[int(i * step)] for i in range(sample)]
         log(f"size {size}: {len(scenarios)} scenarios x {len(setups)} setups x {reps} reps")
         tasks = [one(setup, world, s, rep) for setup in setups for s in scenarios for rep in range(reps)]
         await asyncio.gather(*tasks)
@@ -247,6 +253,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--reps", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--sample", type=int, default=None, help="evenly spaced subset covering every family")
     parser.add_argument("--families", default="")
     parser.add_argument("--max-usd", type=float, default=5.0, help="cap for this run (the provider ledger cap still applies)")
     parser.add_argument("--max-tokens", type=int, default=1024)
@@ -262,7 +269,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     (run_dir).mkdir(parents=True, exist_ok=True)
     (run_dir / "config.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
     asyncio.run(run(setups, args.split, sizes, client, run_dir, reps=args.reps, concurrency=args.concurrency,
-                    limit=args.limit, families=families))
+                    limit=args.limit, families=families, sample=args.sample))
     return 0
 
 
