@@ -1,242 +1,289 @@
-# Agent Overload: Open-Loop Routing — Design
+# Agent Overload: Reference-First Routing — Design (v2)
 
 Date: 2026-11-20 · Branch: `agent-overload` · Status: draft for approval
+v2 folds in the survey of public forks: `docs/research/2026-11-20-fork-survey.md`.
 
 ## 1. Intent
 
 OpenPoke's Interaction Agent (IA) sees every Execution Agent ever created, as a bare
 name, on every turn. Over weeks that list reaches hundreds or thousands of agents.
 
-**Framing.** Overload is not mainly a list-length problem. It is that Poke cannot tell
-what is still unfinished, so it either reads everything or guesses. A good human
-assistant tracks open items (a draft waiting for approval, a reply being waited on, a
-scheduled reminder), not every task ever done. The prompt should hold what is open;
-everything else should be one search away.
+**What others already did.** At least 20 public forks solve this the same way: give the
+model richer agent cards, retrieve the top few, add a search tool and a duplicate guard.
+They reach roughly 0.86–0.93 routing accuracy at 150–1,000 agents. Their own reports
+show where that stops: the model asks the user on only 2 of 30 ambiguous cases, reuses
+agents across people and topics, trades wrong reuse for duplicates, and still loses
+accuracy as the roster grows (92% at 50 agents → 74% at 1,000).
 
-**Why this bounds the prompt.** Open items ≈ new tasks per day × days until done
-(Little's Law). A user who starts 30 tasks a day that close in ~2 days has ~60 open
-items whether they have 500 agents or 200,000. The working set scales with how busy the
-user is, not with how long they have used the product.
+**Framing.** Those residual errors are reference errors: which draft does "send it"
+mean, which Alice, is this the old thread or new work. A model guessing from cards is
+the wrong tool for them. Most references can be settled from data the system already
+has (thread, draft and contact IDs, `#ids`, the open items it just showed the user).
+What cannot be settled is genuinely ambiguous, and the right move is to ask, not guess.
 
-**User-visible failures we are fixing** (all at one decision point, `send_message_to_agent`):
+**Thesis.** Resolve references in code where the data allows; make "ambiguous, ask the
+user" an outcome enforced in code; let the model choose only among what code could not
+settle. Keep the prompt bounded by showing open items, not history.
+
+**Why the prompt stays bounded.** Open items ≈ new tasks per day × days until done
+(Little's Law). 30 tasks a day closing in ~2 days ≈ 60 open items, at 500 agents or
+200,000. The working set scales with how busy the user is, not with how long they have
+used the product.
+
+**User-visible failures we fix**, all at one decision point (`send_message_to_agent`):
 - Duplicate: a follow-up spawns a fresh agent that has forgotten the thread.
-- Misroute: a follow-up lands on the wrong agent and acts on the wrong thing
-  (worst case: sends the wrong draft).
-- Bloat: the roster grows until the call is slow, expensive, then overflows the context
+- Misroute: a follow-up lands on the wrong agent (worst case: sends the wrong draft).
+- Silent guess: two things match and the assistant picks one without asking.
+- Bloat: the roster grows until the call is slow, costly, then overflows the context
   window (~15–18k agents at today's ~10 tokens per name).
 
 ## 2. Goals, non-goals, anti-goals
 
 Goals
-- Bounded, informative agent context for the IA at any roster size (10 → 20,000).
+- Bounded agent context for the IA at any roster size (10 → 20,000).
 - Follow-ups reach the right agent; new work still gets a new agent.
-- No wrong action on irreversible steps: when ambiguous, ask.
-- Evidence: an evaluator that runs the real IA prompt with a live model and compares
-  today's behaviour, the "obvious" fixes, and ours.
+- Ambiguous references produce a short question, enforced in code, not left to the prompt.
+- No duplicate agents for thread-bound work (same email thread or draft), by construction.
+- Evidence against today's OpenPoke **and** against the common fork answer, on the
+  failure classes the forks reported, with intervals and a held-out set.
 
-Non-goals (stated in README as next steps)
+Non-goals (README next steps)
 - Multi-user / 10k-tenant platform work. OpenPoke is single-user by design.
 - Running the full app with Gmail/Composio or the web UI.
 - Poke's personality or texting voice.
+- Re-doing what every fork has (send gate, injection suite, lifecycle simulation);
+  we reference them as known and spend the day on the open problem instead.
 
-Anti-goals (would be a failure even if it technically works)
-- Silent auto-merging or silent redirection of agents (hides errors, irreversible).
+Anti-goals
+- Silent auto-merging or silent redirection of agents.
 - Untrusted email text injected into the IA prompt on every turn.
-- Improvements that only show up on scenarios we designed to favour our approach.
+- Asking so often that the assistant becomes annoying (over-ask is a tracked metric).
+- Gains that only appear on scenarios built to favour our approach.
 
 ## 3. Constraints and assumptions
 
 - Time: one working day, ~5–6 hours to build, evaluate and write up.
-- Budget: company-provided OpenRouter + OpenAI keys, about $50 total with a hard limit.
-  The eval runner enforces `OPENPOKE_EVAL_BUDGET_USD` (default 35). No personal keys
-  without the owner's explicit OK.
+- Budget: company-provided OpenRouter + OpenAI keys, ~$50 total, hard limit. The eval
+  runner enforces `OPENPOKE_EVAL_BUDGET_USD` (default 35) and always sets `max_tokens`
+  (unset, OpenRouter reserves the model's full output allowance per call). No personal
+  keys without the owner's explicit OK.
 - The brief allows vendoring: the eval imports the fork's real prompt builder and tool
   schemas; only the LLM call is live; Gmail tools are stubbed.
+- OpenPoke's configured model (`anthropic/claude-sonnet-4`) may no longer be served;
+  check OpenRouter's model list at setup and record the substitute.
 - Windows dev machine: `roster.py` imports `fcntl` (Unix-only). We make it portable.
-- Scenarios are synthetic (no real usage logs available). Mitigation: scenario
-  families are fixed before tuning; a held-out set is never used during development.
-- Repo is a public fork (MIT). The assignment brief itself is not committed.
+- Scenarios are synthetic. Mitigations: a held-out set from a separate seed, frozen by
+  hash before the first run of our system; scenario families fixed before tuning; the
+  common-answer baseline is built honestly and tuned on dev like ours.
+- Public fork (MIT). The assignment brief is not committed. No code or data from other
+  forks is used.
 
 ## 4. Approaches considered
 
 | Approach | Verdict | Why |
 |---|---|---|
-| A. Hybrid search + lifecycle (BM25 + embeddings + recency, top-K cards, archive, duplicate check) | Partly used | Good cold recall, but "recent" is a weak proxy for "relevant", and search precision falls as near-duplicates pile up. Kept as the cold path only. |
-| B. One agent per person/project (merge) | Rejected for today | Fixes sprawl at the root but merges are hard to undo, triggers need re-keying, and topics collide inside one larger agent. |
-| C. Fast-model pre-router | Next step | Strong on nuance, but adds a paid serial call per turn and does nothing for sprawl. |
-| D. Cluster/folder directory | Rejected | Collisions sit on cluster boundaries; extra round trip per route; unproven. |
-| **E. Open-loop working set + search + spawn-or-reuse check + ask-when-risky** | **Picked** | Bounded by construction, deterministic signals from tool calls, discriminative cards, measurable safety. Uses A's search for cold recall. |
+| A. Cards + retrieval + search + duplicate guard (the common fork answer) | Baseline B2, and our cold path | Proven to ~0.9; residual errors are reference errors it cannot fix by guessing better. |
+| B. One agent per person/project (merge) | Rejected for today | Hard to undo, triggers need re-keying, topics collide inside one agent. |
+| C. Fast-model pre-router | Next step | Paid serial call per turn; still a guess. |
+| D. Cluster/folder directory | Rejected | Collisions sit on cluster boundaries; extra round trip. |
+| **E. Reference-first routing: resolver + ambiguity contract + open-loop working set** | **Picked** | Settles resolvable references deterministically, asks on true ambiguity, bounded prompt; targets exactly the errors A leaves. |
 
 ## 5. Design
 
 ### 5.1 Agent registry (`server/services/execution/registry.py`)
-SQLite at `server/data/execution_agents/agents.db`, replacing `roster.json` as the
-source of truth (migrated on first load; `roster.json` kept for compatibility).
+SQLite at `server/data/execution_agents/agents.db`, source of truth (migrates
+`roster.json` on first load; `roster.json` kept for compatibility).
 
 `agents`: `id INTEGER PK` (shown as `#12`), `name`, `name_key` (casefolded,
-punctuation-collapsed; unique), `created_at`, `last_active_at` (UTC ISO),
-`state`, `state_note` (one line), `topic` (first IA instruction, trimmed),
-`request_count`, `archived INTEGER`, `has_active_trigger INTEGER`.
+punctuation-collapsed; unique), `created_at`, `last_active_at` (UTC ISO), `state`,
+`state_note` (one line), `topic` (first IA instruction, trimmed), `request_count`,
+`archived`, `has_active_trigger`.
 
-`agent_refs`: `(agent_id, kind, value, created_at)` with kinds `contact`
-(email address), `thread`, `draft`, `trigger`, `subject`. Captured when tools run,
-not parsed from logs (logs truncate args at 200 chars and results at 500).
+`agent_refs`: `(agent_id, kind, value, created_at)`, kinds `contact` (email address),
+`contact_name`, `thread`, `draft`, `trigger`, `subject`, `alias`. Captured when tools run
+(a hook in the execution runtime), not parsed from logs, which truncate tool args at 200
+chars and results at 500.
 
 `agents_fts`: FTS5 over `name`, `topic`, `state_note`, refs text.
 
 Identity stays the agent name for logs and triggers (backward compatible).
-`send_message_to_agent` accepts an exact name, a `#id`, or a name that matches an
-existing `name_key` (fixes "Email to Alice" vs "email to alice").
+`send_message_to_agent` accepts an exact name, a `#id`, or a name matching an existing
+`name_key`.
 
 ### 5.2 Open-loop state (`server/services/execution/loops.py`)
 States: `running`, `waiting_on_user`, `waiting_on_others`, `scheduled`, `done`, `failed`.
-
-Derived from tool calls observed in the execution runtime, then from the final reply:
-- `gmail_create_draft` ok → `waiting_on_user` ("draft to X re Y awaiting your OK"); ref draft, contact, subject.
-- `gmail_execute_draft` / `gmail_reply_to_thread` / `gmail_forward_email` ok → `waiting_on_others` ("sent to X re Y; waiting for reply"); refs thread, contact.
+- `gmail_create_draft` ok → `waiting_on_user` ("draft to X re Y awaiting your OK").
+- `gmail_execute_draft` / `gmail_reply_to_thread` / `gmail_forward_email` ok →
+  `waiting_on_others` ("sent to X re Y; waiting for reply").
 - `createTrigger` active → `scheduled`; paused/completed triggers recompute.
-- Execution failed → `failed` (shown until surfaced once).
-- Otherwise → `done`.
+- Failed run → `failed` (shown until surfaced once). Otherwise → `done`.
 - `waiting_on_others` lapses to `done` after 7 days without activity.
+- Archive: `done`/`failed`, idle ≥ 14 days, no active trigger. A cheap SQL update at
+  render time. Routing to an archived agent reactivates it.
 
-Archive: `done`/`failed`, idle ≥ 14 days, no active trigger → `archived=1`. Runs as a
-cheap SQL update when the roster is rendered (no background job). Any routing to an
-archived agent reactivates it.
-
-State notes are built only from IA-authored instructions and structured tool fields
-(addresses, subjects, IDs), never from email bodies (prompt-injection guard).
+Notes are built only from IA-authored instructions and structured tool fields, never
+from email bodies.
 
 ### 5.3 Working set in the IA prompt (`agent.py::_render_active_agents`)
-`<agents>` replaces `<active_agents>`:
-- Open items (all non-`done` states), most recent first, capped at 25.
-- Up to 5 most recently active other agents.
-- A count line: "+19,940 more agents not shown. Use search_agents to find older work."
-
-Line format (~25–35 tokens):
+`<agents>` replaces `<active_agents>`: open items (non-`done`), most recent first, capped
+at 25; up to 5 most recently active others; a count line ("+19,940 more agents not
+shown; use search_agents"). Line format (~25–35 tokens):
 `#412 Email to Alice – Q3 deck · waiting on you: draft to alice@acme.com re "Q3 deck v2" · 2h ago`
 
-### 5.4 `search_agents` tool (new IA tool)
-`search_agents(query, include_archived=false, limit=8)`. Ranking: FTS5 BM25 over the
-fields above, boosted by exact ref match (email address, `#id`, subject), state
-(open > done > archived) and recency (30-day half-life). Results are collapsed so one
-contact cannot fill the list (max 2 per contact, "+N more for alice@acme.com").
-Optional dense embeddings (`text-embedding-3-small`) fused by RRF behind a flag;
-on or off by default is decided by the ablation.
+### 5.4 `search_agents` tool
+`search_agents(query, include_archived=false, limit=8)`. FTS5 BM25, boosted by exact ref
+match, state (open > done > archived) and recency (30-day half-life). Max 2 results per
+contact with a "+N more" hint. Optional embeddings fused by RRF behind a flag; default
+set by ablation.
 
-### 5.5 Spawn-or-reuse check (`tools.py::send_message_to_agent`)
-For a name that is not an existing agent:
-1. Search with name + instructions.
-2. If a strong match exists (shared contact/thread with an open item, or a lexical
-   score above threshold), do not dispatch. Return `possible_duplicate` with up to 3
-   cards and the hint: reuse by calling again with the exact name or `#id`, or pass
-   `create_new: true` if this is separate work.
-3. Agents created earlier in the same IA turn are never flagged (intentional parallel splits).
+### 5.5 Reference resolver (`server/services/execution/resolver.py`) — the core
+Runs in code before each IA turn on the incoming user message or event. Output:
+`Resolution{kind: resolved|ambiguous|unresolved, candidates: [agent_id…], reason}`.
 
-Irreversible guard: if instructions send/forward/reply/execute and the target agent
-is not `waiting_on_user` while other agents are, return `confirm_target` listing the
-agents with pending drafts; the IA must ask the user.
+Order (first rule that fires wins):
+1. **Explicit**: `#id`; exact or normalized agent name; an email address, thread ID or
+   draft ID present in the message or in the event metadata.
+2. **Inbound events**: an email-watcher notification carries `thread_id` and sender;
+   it resolves to the agent holding that thread, else the open item waiting on that
+   sender. (Fixes agents spawned from alerts alone.)
+3. **Conversational reference**: short anaphoric or confirming messages ("send it",
+   "yes go ahead", "did she reply?", "cancel that") resolve against the open items the
+   assistant surfaced in the last few turns (agent results in the conversation log
+   carry agent IDs). One matching open item of the needed kind → resolved; two or more
+   → ambiguous.
+4. **Entity**: contact names/emails in the message → that contact's agents, open first.
+   One live matter → resolved; several live matters → candidates with their notes.
+5. Otherwise unresolved: the model decides from the working set, using search if needed.
 
-Schema change: optional `create_new: boolean` on `send_message_to_agent`.
+Rendered into the turn as `<routing_hint>`: "Likely #412 (reason: confirms the draft
+shown 2 turns ago)" or "Ambiguous between #412 and #40; ask which before acting".
+Learned aliases (5.8) feed rule 3/4.
 
-### 5.6 Prompt changes (`system_prompt.md`)
-- Explain the `<agents>` block, `#ids`, states and `search_agents`.
-- Replace "Don't worry if the agent name is unrelated…" with: reuse an agent when it
-  holds the relevant thread, draft or person+topic; otherwise create one named
-  "Person/Org – Topic".
-- "If a confirmation could match more than one waiting draft, ask which one."
+### 5.6 Ambiguity contract (enforced in `tools.py::send_message_to_agent`)
+- If the resolver said `ambiguous` and the instruction is irreversible (send, forward,
+  reply, execute, delete, cancel) → do not dispatch; return `needs_user_choice` with the
+  options as one-liners. The prompt tells the IA to ask in one short message.
+- If the target of an irreversible instruction is not `waiting_on_user` while another
+  agent is → `confirm_target`.
+- Reversible work (search, draft, look up) is never blocked; ambiguity there is a hint.
+- Over-ask guard: no forced question when the resolver resolved to one candidate.
 
-### 5.7 Stretch: inbound email linking
-Before the email watcher dispatches a notification, look up `agent_refs` by thread
-and sender; annotate "Related: #77 Invoice #402 follow-up (waiting on reply from
-bob@…)". Only if core and eval are done.
+### 5.7 Spawn-or-reuse check
+For a name that is not an existing agent: if the resolver or search finds an agent that
+owns the same thread/draft → reuse is required (return `owned_by` with the ID). If a
+strong match on contact + subject with an open item → `possible_duplicate` with up to 3
+cards; re-call with the ID or `create_new: true`. Agents created earlier in the same IA
+turn are never flagged (intentional parallel splits). New optional schema field:
+`create_new: boolean`.
+
+### 5.8 Stretch: learning from corrections
+When the user answers a `needs_user_choice` question, store the reference phrase as an
+`alias` ref on the chosen agent ("the lunch one" → #40). The next time, rule 3/4 resolves
+it without asking. Evaluated with repeat-reference scenarios.
+
+### 5.9 Prompt changes (`system_prompt.md`)
+Explain `<agents>`, `<routing_hint>`, `#ids`, states, `search_agents`,
+`needs_user_choice`. Replace "Don't worry if the agent name is unrelated…" with: reuse
+an agent when it holds the thread, draft or person+topic; otherwise create one named
+"Person/Org – Topic". When asking, offer the options in one short line.
 
 ## 6. Beyond the brief (code fixes)
 
-1. Concurrent runs on one agent: per-agent `asyncio.Lock` in `ExecutionBatchManager`
-   so runs on the same agent are serialized in order.
-2. Unbounded execution-agent memory: wire the existing `conversation_limit` through a
-   setting (default 20 requests); test it.
-3. Windows portability: `fcntl` optional with an `msvcrt` fallback.
+1. Agents spawned from email alerts alone: handled by resolver rule 2 (the watcher passes
+   `thread_id` and sender with the notification).
+2. Concurrent runs on one agent: per-agent `asyncio.Lock` in `ExecutionBatchManager`.
+3. Unbounded execution-agent memory: wire the existing `conversation_limit` (default 20).
+4. No `max_tokens` on LLM calls: set a sane default in the OpenRouter client.
+5. Windows portability: `fcntl` optional with an `msvcrt` fallback.
 
-README only, with the fix sketched: triggers can fire twice (no claim/lease, next fire
-updated after completion), one global result batch (a slow agent holds back unrelated
-answers), trigger query cannot use its index, polling email watcher, single-tenant
-storage, prompt caching layout.
+README only, with the fix sketched: duplicate trigger fires (no claim/lease), one global
+result batch, trigger query cannot use its index, polling watcher, single-tenant storage,
+prompt-caching layout, and the code-level send gate others have shown.
 
 ## 7. Evaluation
 
-Harness under `evals/`. Uses the fork's real system prompt, message builder and tool
-schemas; live model via OpenRouter; Gmail tools stubbed; IA loop up to 4 iterations
-with stub tool results (`search_agents` and the spawn check run for real).
+Harness under `evals/`, using the fork's real prompt, message builder and tool schemas;
+live model via OpenRouter; Gmail stubbed; IA loop up to 4 iterations with stub tool
+results (`search_agents`, the resolver and the guards run for real).
 
-**World generator** (seeded): ~40 contacts including collision families (two Alices;
-one Alice with four topics), ~30 task archetypes, agents spread over 90 days with
-realistic IA-style names, states and refs. Scenario gold agents and their decoys exist
-at every size; filler agents scale the roster.
+**World generator** (seeded): ~40 contacts including collision families (two Alices; one
+Alice with four topics; two clients at one company), ~30 task archetypes, agents spread
+over 90 days with IA-style names, states and refs. Scenario gold agents and decoys exist
+at every size; filler scales the roster.
 
-**Scenario families** (~60 dev + ~20 held-out), each with recent conversation history,
-a message (user or watcher), and gold `{agent | NEW | ASK}` plus a risk flag:
+**Scenario families**, weighted toward the classes the forks reported failing. ~80 dev
+and ~30 held-out, each with recent conversation history, a message or event, gold
+`{agent | NEW | ASK}` and a risk flag:
 1. Needle: follow-up to an older agent by topic.
-2. Collision: same person, different topic.
-3. Reference/recency: "did she reply?", "send it", with history ending on an agent result.
-4. Genuinely new task with look-alikes present (false-reuse trap).
-5. Archived agent resurrection.
-6. Irreversible ambiguity: two drafts waiting, vague confirmation → gold ASK.
-7. Inbound email from a waiting thread (stretch).
+2. Same person, different topic (collision).
+3. Conversational reference: "send it", "did she reply?", after 1–4 intervening turns.
+4. True ambiguity: two drafts or two live matters match → gold ASK.
+5. Clear case that looks ambiguous at first glance → must NOT ask (over-ask check).
+6. Genuinely new task with look-alikes present (false-reuse trap).
+7. Cross-client: same company, different client.
+8. Inbound email on a waiting thread → owner agent, not a new one.
+9. Archived agent resurrection.
+10. Repeat reference after a clarification (stretch, for 5.8).
 
 **Setups**
-- B0 Today: names-only full roster (unchanged code path).
-- B1 Obvious: full roster with descriptions.
-- B2 Author's suggestions: embedding top-15 + 8 most recent hot cache.
-- Ours: working set + `search_agents` + spawn check + ask-when-risky.
-- Ablations of ours: no search tool; no spawn check; with/without embeddings.
+- B0 Today: names-only full roster, upstream prompt and tools.
+- B1 Full roster with descriptions, upstream prompt.
+- B2 The common fork answer: cards + BM25/embedding top-K + recent cache + search tool +
+  duplicate guard, upstream prompt plus card instructions. Built and tuned on dev with the
+  same care as ours.
+- Ours. Ablations: resolver off; ambiguity contract off; working set without open-loop
+  states; embeddings on/off.
 
-B0–B2 use the upstream system prompt and tool schemas, vendored from upstream commit
-`5b5f635`, so the comparison isolates the routing change; only the agents block differs.
-Ours uses the modified prompt and tools.
+B0–B2 use the upstream prompt and schemas vendored from `5b5f635`, so differences come
+from routing.
 
-**Decision extraction**: the final `send_message_to_agent` target after the loop
-(existing agent → that agent; unknown name → NEW). A turn that ends with no dispatch and
-a user-facing question is ASK. Anything else is recorded as OTHER and counted wrong.
+**Decision extraction**: final `send_message_to_agent` target after the loop (existing →
+that agent; unknown name → NEW); no dispatch plus a user-facing question → ASK; anything
+else → OTHER (wrong).
 
-**Sizes**: 10, 50, 200, 500, 2,000, 20,000. Setups that do not fit the context window
-are recorded as "does not fit" from computed token counts, not called. Large B1 cells
-are subsampled.
+**Sizes**: 10, 50, 200, 1,000, 5,000, 20,000. Setups that do not fit the context window
+are recorded as "does not fit" from computed token counts. Large B1 cells are subsampled.
 
-**Metrics**: follow-up accuracy; duplicate rate (should reuse, created new); false-reuse
-rate (should create, reused); wrong-action rate on irreversible steps; ask rate when
-ambiguous; over-ask rate when clear; prompt tokens per turn; latency p50/p95; cost per turn.
+**Metrics**: routing accuracy; duplicate rate; wrong-reuse rate (overall and
+cross-person/client); clarify recall (asked when gold is ASK) and over-ask rate (asked
+when gold is an agent); wrong-action rate on irreversible steps; prompt tokens per turn;
+latency p50/p95; cost per turn. 95% bootstrap intervals; paired comparisons
+(Ours vs B2, Ours vs B0).
 
-**Discipline**: temperature 0; dev runs on a cheap model; headline runs on the IA's
-configured model; budget guard reads per-call usage and OpenRouter prices; results as
-JSONL + summary table + charts in README; held-out set run once at the end.
+**Discipline**: temperature 0; dev runs on a cheap model; headline runs on the IA's model
+(or its recorded substitute) plus one second model; held-out set hashed before Ours first
+runs on it and run once; per-call usage logged with prices from OpenRouter's model list;
+JSONL results, summary tables and charts in README.
 
-Stretch: 7-day replay (~150 turns) of B0 vs Ours plotting total agents vs open items.
+**Optional evidence (owner-run)**: the owner texts real Poke 8 ambiguity scenarios by
+hand; outcomes are recorded and reported as a small, clearly labelled spot check.
 
-**Tests (pytest)**: registry (normalize, migrate, ids), state derivation from fixture
-tool calls, bounded working-set rendering, search ranking (exact ref, collapse,
-archived), spawn check paths (duplicate, `create_new`, same-turn sibling, irreversible
-guard), archive/reactivate, per-agent lock ordering, `conversation_limit` wiring, and a
-scripted fake-LLM behavioural test through the IA tool loop.
+**Tests (pytest)**: registry (normalize, migrate, ids), state derivation from fixture tool
+calls, bounded working set, search ranking and collapse, every resolver rule, ambiguity
+contract paths (irreversible blocked, reversible allowed, no over-ask on resolved),
+spawn check paths, archive/reactivate, per-agent lock ordering, `conversation_limit`, and
+a scripted fake-LLM behavioural test through the IA tool loop.
 
 ## 8. Who builds what
 
-- Claude: core router (5.1–5.6), eval runner and baselines, integration, review.
-- Kiro (Opus 5.5 high, parallel, own files under `evals/world/`): world + scenario
-  generator against a frozen schema in `evals/schema.py`.
+- Claude: registry, resolver, contract, prompt, integration, eval runner, baselines, review.
+- Kiro (Opus 5.5 high, own files under `evals/world/`): world + scenario generator against
+  a frozen schema in `evals/schema.py`, started once the schema is committed.
 - Kiro or Devin at the end: independent review and test re-run.
-- Owner: pastes keys into `.env`, approves this doc, approves any personal-key spend.
+- Owner: keys (done), approvals, any personal-key spend, the optional real-Poke check.
 
 ## 9. Milestones (about 5.5 hours)
 
-1. Setup: venv, keys, one smoke LLM call through the real prompt (0:20).
-2. Core router + unit tests; Kiro builds world/scenarios in parallel (→ 2:00).
-3. Runner + baselines; dev runs on cheap model; fix what it shows (→ 3:15).
-4. Headline runs on the IA model; charts (→ 4:00).
-5. Beyond-the-brief fixes + tests (→ 4:40).
-6. README, review, PR into the fork's `main` (→ 5:30).
+1. Setup: venv, model availability, one smoke call through the real prompt; commit
+   `evals/schema.py`; start Kiro (0:30).
+2. Registry, loops, working set, search + tests (→ 1:45).
+3. Resolver, ambiguity contract, spawn check, prompt + tests (→ 2:45).
+4. Runner + B0/B1/B2; dev runs on a cheap model; fix what they show (→ 3:45).
+5. Held-out hash, headline runs, second model, charts (→ 4:30).
+6. Beyond-the-brief fixes + tests (→ 4:50).
+7. README, independent review, PR into the fork's `main` (→ 5:30).
 
 ## 10. Left to the builder
 
-Exact thresholds for the duplicate check and search boosts (tuned on dev scenarios
-only); chart styling; scenario wording.
+Exact thresholds (tuned on dev only); the anaphora/confirmation phrase lists; chart
+styling; scenario wording.
