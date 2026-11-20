@@ -247,6 +247,13 @@ def _name_overlap(a: str, b: str) -> float:
     return len(left & right) / len(left | right)
 
 
+def _related_to(reg, owner: AgentRecord, agent_name: str, instructions: str) -> bool:
+    if _name_overlap(agent_name, owner.name) > 0:
+        return True
+    emails = {e.casefold() for e in _EMAIL.findall(f"{agent_name} {instructions}")}
+    return bool(emails) and any(r.kind == "contact" and r.value in emails for r in reg.refs(owner.id))
+
+
 def _possible_duplicates(reg, agent_name: str, instructions: str, ctx: TurnContext) -> list[AgentRecord]:
     """Open agents that look like the same work: same name words, or same contact and topic words."""
     emails = {e.casefold() for e in _EMAIL.findall(f"{agent_name} {instructions}")}
@@ -305,16 +312,24 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
         phrase = alias_phrase(ctx.message)
         if len(phrase.split()) >= 2:  # remember the question, to learn the answer next turn
             reg.set_pending_choice(phrase, [c.id for c in options])
+        ctx.blocked += 1
+        message = "Ambiguous request and the next step cannot be undone. Ask the user which one; do not pick."
+        if ctx.blocked > 1:  # the model is retrying: a turn that never replies is the worst outcome
+            message = "Stop retrying tools. Reply to the user now and ask which one they mean."
         return ToolResult(success=False, payload={
             "status": "needs_user_choice",
-            "message": "Ambiguous request and the next step cannot be undone. Ask the user which one; do not pick.",
+            "message": message,
             "options": _cards(reg, options),
         })
 
-    # 2. Irreversible step aimed somewhere other than what the message refers to.
-    if irreversible and target is not None and target.id not in ctx.created:
-        if res.kind == "resolved" and res.candidates and target.id not in res.candidates:
-            suggested = reg.get_many(res.candidates[:1])
+    # 2. Irreversible step aimed somewhere other than what the message refers to. Soft: the
+    #    model may insist once (it saw the suggestion), and only a same-kind target (another
+    #    draft when the message meant a draft) counts as a likely wrong send.
+    if irreversible and target is not None and target.id not in ctx.created and target.id not in ctx.challenged:
+        meant = reg.get(res.candidates[0]) if res.kind == "resolved" and res.candidates else None
+        if meant is not None and target.id not in res.candidates and target.state == meant.state:
+            ctx.challenged.add(target.id)
+            suggested = [meant]
             return ToolResult(success=False, payload={
                 "status": "confirm_target",
                 "message": "The user's message most likely refers to this agent instead. Re-route, or ask the user.",
@@ -326,6 +341,7 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
         if res.kind == "unresolved" and sends_draft and target.state != "waiting_on_user":
             drafts = [r for r in reg.open_items(25) if r.state == "waiting_on_user"][:3]
             if drafts:
+                ctx.challenged.add(target.id)
                 return ToolResult(success=False, payload={
                     "status": "confirm_target",
                     "message": "This agent has no draft waiting for approval, but these do. Re-route, or ask the user.",
@@ -337,7 +353,12 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
         # 3. Work that an existing agent already owns must go to that agent.
         if not create_new and res.kind == "resolved" and res.rule in {"explicit", "event", "reference"}:
             owner = reg.get(res.candidates[0])
-            if owner is not None and owner.id not in ctx.created:
+            # Only a new agent about the same thing is a duplicate: an email reply on the
+            # owner's thread, or shared name words / contact. "send it, and also find
+            # flights" must still be able to start the flight search.
+            if owner is not None and owner.id not in ctx.created and (
+                res.rule == "event" or _related_to(reg, owner, agent_name, instructions)
+            ):
                 return ToolResult(success=False, payload={
                     "status": "owned_by",
                     "message": "An existing agent already owns this. Send the work to it by #id.",

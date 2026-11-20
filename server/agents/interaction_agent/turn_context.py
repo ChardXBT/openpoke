@@ -18,6 +18,8 @@ class TurnContext:
     enforce: bool = True  # ambiguity contract + spawn checks (evals ablate this)
     show_related: bool = True  # <related_agents> section (evals ablate this)
     message: str = ""  # the user's message this turn (for learning aliases from clarifications)
+    challenged: set[int] = field(default_factory=set)  # targets already given confirm_target this turn
+    blocked: int = 0  # needs_user_choice answers this turn (escalate the wording on repeats)
 
 
 current_turn: ContextVar[Optional[TurnContext]] = ContextVar("openpoke_turn_context", default=None)

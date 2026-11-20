@@ -122,3 +122,51 @@ def test_forwarding_from_a_finished_agent_is_not_challenged(routing):
     # #4 is archived/done; drafts are waiting elsewhere. Forwarding its findings is fine.
     result = _call(routing, UNRESOLVED, "#4", "Forward the visa checklist to linda@example.com.")
     assert result.payload["status"] == "submitted"
+
+
+def test_multi_task_turn_new_agent_not_owned_by(routing):
+    # "yes send it, and also find flights to tokyo": the reference settles the draft, but a
+    # new, unrelated agent in the same turn is not a duplicate of it.
+    resolved = Resolution("resolved", [1], "confirms the draft Poke just showed", "reference")
+    result = _call(routing, resolved, "Flight search – Tokyo", "Find flights to Tokyo in March")
+    assert result.payload["status"] == "submitted" and result.payload["new_agent_created"] is True
+
+
+def test_related_new_agent_still_owned_by(routing):
+    resolved = Resolution("resolved", [3], "the incoming email is on its thread thr_lunch1", "event")
+    result = _call(routing, resolved, "Lunch reply", "Read Alice's reply about lunch")
+    assert result.payload["status"] == "owned_by"
+
+
+def test_forward_from_other_kind_of_agent_not_challenged(routing):
+    # The message resolved to a draft (#1); forwarding from a finished agent (#4) is other work.
+    resolved = Resolution("resolved", [1], "confirms the draft", "reference")
+    result = _call(routing, resolved, "#4", "Forward the visa checklist to linda@example.com.")
+    assert result.payload["status"] == "submitted"
+
+
+def test_insisting_after_confirm_target_goes_through(routing):
+    from server.agents.interaction_agent.turn_context import TurnContext, current_turn
+
+    ctx = TurnContext(resolution=Resolution("resolved", [1], "confirms the draft", "reference"))
+    token = current_turn.set(ctx)
+    try:
+        first = routing.tools_mod.send_message_to_agent("#2", "Send the draft.")
+        second = routing.tools_mod.send_message_to_agent("#2", "Send the draft.")
+    finally:
+        current_turn.reset(token)
+    assert first.payload["status"] == "confirm_target"
+    assert second.payload["status"] == "submitted"  # the model saw the suggestion and insisted
+
+
+def test_needs_user_choice_never_relents(routing):
+    from server.agents.interaction_agent.turn_context import TurnContext, current_turn
+
+    ctx = TurnContext(resolution=AMBIGUOUS)
+    token = current_turn.set(ctx)
+    try:
+        results = [routing.tools_mod.send_message_to_agent("#1", "Send the draft.") for _ in range(3)]
+    finally:
+        current_turn.reset(token)
+    assert [r.payload["status"] for r in results] == ["needs_user_choice"] * 3
+    assert "Stop retrying" in results[-1].payload["message"]
