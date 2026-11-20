@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Optional
 
-from evals.harness.grade import OUTCOMES, answer_matches, extract_decision, grade, summarize
+from evals.harness.grade import answer_matches, extract_decision, grade, summarize
 from evals.harness.llm import Budget, BudgetExceeded, LLMClient, budget_for
 from evals.schema import Scenario, Setup, World
 from evals.setups.common import parse_agent_id

@@ -4,7 +4,7 @@ import json
 import pytest
 
 from evals.harness import runner
-from evals.harness.grade import Decision, extract_decision, grade, paired_delta, summarize, _bootstrap
+from evals.harness.grade import Decision, extract_decision, grade, paired_delta, _bootstrap
 from evals.harness.llm import Budget, BudgetExceeded, LLMClient, LLMResult, Pricing, Price
 from evals.schema import Contact, EmailEvent, Gold, Scenario, Turn, World, WorldAgent
 from evals.setups.b0_names import B0Names

@@ -5,7 +5,7 @@ import pytest
 
 from server.config import Settings
 from server.services.execution.log_store import ExecutionAgentLogStore
-from server.services.execution.registry import AgentRegistry, get_agent_registry, set_agent_registry
+from server.services.execution.registry import AgentRegistry, set_agent_registry
 
 
 @pytest.fixture()
