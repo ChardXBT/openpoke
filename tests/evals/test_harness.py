@@ -238,3 +238,29 @@ def test_run_writes_rows_and_summary(tmp_path):
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert set(summary) == {"b0_names|fake/model|6", "ours|fake/model|6"}
     assert summary["ours|fake/model|6"]["clarify_recall"] == 1.0
+
+
+def test_answer_matches_needs_specific_facts():
+    from evals.harness.grade import answer_matches
+
+    note = "Done: top pick Fuunji (tsukemen, Shibuya); runner-up Afuri."
+    assert answer_matches(note, "Fuunji was the top pick, with Afuri as runner-up.")
+    assert answer_matches("Done: cheapest was Intact at $142/mo.", "Intact, at $142/mo.")
+    assert not answer_matches(note, "I'm not sure, let me check.")
+    assert not answer_matches(note, "The top pick was great.")  # generic words only
+
+
+def test_recall_family_direct_answer_is_correct():
+    answered = Decision("OTHER", answered=True)
+    assert grade(answered, _sc(Gold("agent", 20), family=1)) == "correct"
+    assert grade(answered, _sc(Gold("agent", 6), family=9)) == "correct"
+    assert grade(answered, _sc(Gold("agent", 4), family=3)) == "other"  # status questions must check
+    assert grade(Decision("OTHER"), _sc(Gold("agent", 20), family=1)) == "other"
+
+
+def test_id_with_trailing_name_resolves():
+    from evals.setups.common import id_or_name_resolver
+
+    resolve = id_or_name_resolver(make_world())
+    assert resolve("#2 Bob invoice follow-up") == 2
+    assert resolve("#2") == 2 and resolve("#99 Nope") is None

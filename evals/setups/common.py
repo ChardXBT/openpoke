@@ -52,10 +52,9 @@ def id_or_name_resolver(world: World):
 
     def resolve(name: str) -> Optional[int]:
         text = str(name).strip()
-        match = re.fullmatch(r"#(\d+)", text)
-        if match:
-            value = int(match.group(1))
-            return value if value in ids else None
+        match = re.match(r"#(\d+)\b", text)  # "#15" or "#15 Air Canada Refund"
+        if match and int(match.group(1)) in ids:
+            return int(match.group(1))
         return by_name.get(text, folded.get(text.casefold()))
 
     return resolve

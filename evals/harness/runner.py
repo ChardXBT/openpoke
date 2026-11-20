@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Optional
 
-from evals.harness.grade import OUTCOMES, extract_decision, grade, summarize
+from evals.harness.grade import OUTCOMES, answer_matches, extract_decision, grade, summarize
 from evals.harness.llm import Budget, BudgetExceeded, LLMClient, budget_for
 from evals.schema import Scenario, Setup, World
 from evals.setups.common import parse_agent_id
@@ -137,6 +137,10 @@ async def run_turn(setup: Setup, world: World, scenario: Scenario, client, rep: 
             messages.append(_tool_message(call, name, args, result))
 
     decision = extract_decision(calls, user_msgs, prepared.resolve_target)
+    if decision.kind == "OTHER" and scenario.gold.agent_id is not None and user_msgs:
+        gold = next((a for a in world.agents if a.id == scenario.gold.agent_id), None)
+        if gold is not None:
+            decision.answered = answer_matches(f"{gold.state_note} {gold.topic}", user_msgs[-1])
     outcome = grade(decision, scenario)
     return {
         **base, "outcome": outcome, "decision": asdict(decision), "guard_statuses": statuses,

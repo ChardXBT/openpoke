@@ -164,10 +164,9 @@ class B2Common:
 
         def resolve_target(name_or_id: str) -> Optional[int]:
             candidate = str(name_or_id).strip()
-            id_match = re.fullmatch(r"#(\d+)", candidate)
-            if id_match:
-                agent_id = int(id_match.group(1))
-                return agent_id if agent_id in agents_by_id else None
+            id_match = re.match(r"#(\d+)\b", candidate)  # "#15" or "#15 Air Canada Refund"
+            if id_match and int(id_match.group(1)) in agents_by_id:
+                return int(id_match.group(1))
             if candidate in names:
                 return names[candidate]
             return folded_names.get(candidate.casefold())

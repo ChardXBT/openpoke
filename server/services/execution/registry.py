@@ -30,6 +30,7 @@ CASEFOLD_REF_KINDS = {"contact", "contact_name", "subject", "alias"}
 
 _NON_ALNUM = re.compile(r"[^0-9a-z]+")
 _HASH_ID = re.compile(r"^#(\d+)$")
+_HASH_PREFIX = re.compile(r"^#(\d+)\b")
 
 
 def utc_now() -> datetime:
@@ -256,6 +257,13 @@ class AgentRegistry:
         match = _HASH_ID.match(text)
         if match:
             return self.get(int(match.group(1)))
+        # Models often write "#15 Air Canada Refund": the id wins over the trailing name.
+        prefixed = _HASH_PREFIX.match(text)
+        if prefixed:
+            rec = self.get(int(prefixed.group(1)))
+            if rec is not None:
+                return rec
+            text = text[prefixed.end():].strip(" -–—:·|") or text  # unknown id: try the name
         with self.connection() as conn:
             row = conn.execute(f"SELECT {_COLUMNS} FROM agents WHERE name = ?", (text,)).fetchone()
             if row is None:

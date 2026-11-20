@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import re
 import statistics
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Iterable, Optional
@@ -12,6 +13,24 @@ from server.services.execution.resolver import is_irreversible
 
 OUTCOMES = ("correct", "duplicate", "wrong_reuse", "missed_ask", "over_ask", "other")
 INBOUND_FAMILY = 8  # email-event scenarios: informing the user without dispatch is acceptable
+# Questions about a finished agent's past result: answering straight from the agent's
+# card (without dispatching) is a correct, cheaper outcome when the facts match.
+RECALL_FAMILIES = frozenset({1, 9})
+
+_FACT = re.compile(r"\$?\d[\d,.:]*|[a-z][a-z'\-]{3,}")
+_COMMON = frozenset(
+    "about after again agent also been before both could done email emails find found from have "
+    "into just last like more need next only over reply sent some still that their them then there "
+    "they this those waiting what when which with would your yours".split()
+)
+
+
+def answer_matches(reference: str, reply: str) -> bool:
+    """True when ``reply`` repeats the reference's distinctive facts (≥2 words, or a number)."""
+    ref = {t for t in _FACT.findall((reference or "").casefold()) if t not in _COMMON}
+    got = set(_FACT.findall((reply or "").casefold()))
+    shared = ref & got
+    return any(any(ch.isdigit() for ch in t) for t in shared) or len(shared) >= 2
 
 
 @dataclass
@@ -22,6 +41,7 @@ class Decision:
     asked: bool = False
     irreversible_dispatch: bool = False
     targets: list = field(default_factory=list)  # every submitted dispatch: agent id or "NEW"
+    answered: bool = False  # replied with the gold agent's recorded facts, without dispatching
 
 
 def extract_decision(
@@ -58,6 +78,8 @@ def grade(decision: Decision, scenario: Scenario) -> str:
         if decision.kind in ("agent", "NEW"):
             return "missed_ask"
         return "other"
+    if scenario.family in RECALL_FAMILIES and decision.kind == "OTHER" and decision.answered:
+        return "correct"
     if scenario.family == INBOUND_FAMILY and decision.kind in ("OTHER", "ASK"):
         # Told the user (often offering a next step as a question), created nothing,
         # touched nothing wrong: the right behaviour for a watcher notification.

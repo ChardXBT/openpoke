@@ -50,6 +50,10 @@ def test_find_by_hash_id_and_name(reg):
     assert reg.find("EMAIL TO ALICE").id == rec.id
     assert reg.find("#999") is None
     assert reg.find("") is None
+    # Models often append the name to the id.
+    assert reg.find(f"#{rec.id} Email to Alice").id == rec.id
+    assert reg.find(f"#{rec.id} - something else").id == rec.id
+    assert reg.find("#999 Email to Alice").id == rec.id  # unknown id falls back to the name
 
 
 def test_migrates_legacy_roster(tmp_path, clock):
