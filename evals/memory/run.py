@@ -22,11 +22,21 @@ from typing import Optional
 from evals.harness.llm import Budget, BudgetExceeded, LLMClient, budget_for
 from evals.harness.runner import MultiBudget
 from evals.memory.cases import CASES
+from evals.memory.cases_heldout import HELDOUT_CASES
 from server.services.profile.learn import apply_extraction, build_extraction_messages
 from server.services.profile.store import Fact, ProfileStore, subject_key
 
 TODAY = datetime(2026, 11, 20, 15, 0, tzinfo=timezone.utc)  # a Friday
 SAFETY_GROUPS = {"negative", "injection"}
+HELDOUT_HASH = Path(__file__).with_name("heldout.sha256")
+
+
+def heldout_hash_ok(cases: list[dict]) -> bool:
+    """The held-out memory cases were frozen by hash before any run; check they are unchanged."""
+    import hashlib
+
+    blob = json.dumps(cases, sort_keys=True, ensure_ascii=False, default=list).encode("utf-8")
+    return HELDOUT_HASH.exists() and hashlib.sha256(blob).hexdigest() == HELDOUT_HASH.read_text(encoding="utf-8").split()[0]
 
 # The learner prompt before this change (commit 78031cd), frozen for comparison: it saw only
 # the user's message, with no profile, no context, no retire and no end dates.
@@ -93,8 +103,11 @@ def grade(case: dict, before: list[Fact], after: list[Fact]) -> list[str]:
         if not found:
             reasons.append(f"missing {exp['has'][0]!r}" + (f" under {sorted(subjects)}" if subjects else "")
                            + (f" until {exp['until'][0]}" if exp.get("until") else ""))
+    # The starting fact must be replaced or retired; a new fact under another subject may still
+    # mention the old value as history ("taking time off after leaving Shopify").
+    start_subjects = {f.subject for f in before}
     for gone in case.get("gone", []):
-        if any(gone in _text(f) for f in after):
+        if any(gone in _text(f) for f in after if f.subject in start_subjects):
             reasons.append(f"still has {gone!r}")
     if case.get("nothing") and (new or retired):
         reasons.append(f"wrote {[f.line() for f in new]}" + (f" retired {[f.subject for f in retired]}" if retired else ""))
@@ -128,7 +141,7 @@ def summarize(rows: list[dict]) -> dict:
         groups: dict = defaultdict(list)
         for r in items:
             groups[r["group"]].append(r["passed"])
-        safety = [r for r in items if r["group"] in SAFETY_GROUPS or r["case"] in {"c4", "c5"}]
+        safety = [r for r in items if r["group"] in SAFETY_GROUPS or r["case"] in {"c4", "c5", "hc3"}]
         out[f"{model} {variant}"] = {
             "n": len(items),
             "pass_rate": round(sum(r["passed"] for r in items) / len(items), 3),
@@ -196,10 +209,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--reps", type=int, default=3)
     parser.add_argument("--max-usd", type=float, default=1.0)
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--split", choices=["dev", "heldout"], default="dev")
     parser.add_argument("--cases", default="", help="comma-separated case ids (default: all)")
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
-    chosen = [c for c in CASES if not args.cases or c["id"] in set(args.cases.split(","))]
+    pool = HELDOUT_CASES if args.split == "heldout" else CASES
+    if args.split == "heldout" and not heldout_hash_ok(HELDOUT_CASES):
+        raise SystemExit("memory held-out cases do not match evals/memory/heldout.sha256; refusing to run")
+    chosen = [c for c in pool if not args.cases or c["id"] in set(args.cases.split(","))]
     asyncio.run(run([m.strip() for m in args.models.split(",") if m.strip()],
                     [v.strip() for v in args.variants.split(",") if v.strip()],
                     args.reps, args.max_usd, Path(args.out), args.concurrency, chosen))

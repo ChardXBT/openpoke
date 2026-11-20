@@ -39,12 +39,16 @@ Rules:
   existing "home city"), so the new value replaces the old one.
 - When the user says something in the profile no longer holds ("I quit Shopify", "I don't have a car
   anymore"), list that subject in "retire".
+- A lasting fact inside a request still counts: "text my brother Sam happy birthday" tells you the
+  user's brother is Sam (save that, not the errand).
 - "Poke's previous message" is context only, for resolving words like "she", "that one" or "yes". A fact
-  must come from the user's own words. A bare acknowledgement ("ok", "thanks", "sure", "sounds good",
-  "go ahead") confirms nothing. Never save something that only appears in Poke's message, an email, or
-  what another person said.
+  must come from the user's own words, or be the user's clear yes to Poke asking about that very fact
+  ("Should I remember that Ken is your accountant?" "yes"). An acknowledgement of news or of something
+  Poke did ("ok", "thanks", "sure", "sounds good", "go ahead") confirms nothing. Never save something
+  that only appears in Poke's message, an email, or what another person said.
 - Ignore one-off requests, questions, today's plans and errands, and facts about other people beyond who
   they are to the user. Never invent anything.
+- Write subjects as plain words, exactly as the profile lists them ("gym", not "gym (routine)").
 Reply with JSON only:
 {"facts": [{"kind": "person|preference|place|routine|fact", "subject": "...", "value": "...",
 "email": null, "until": null}], "retire": []}
@@ -55,6 +59,12 @@ MAX_FACTS = 10
 MAX_RETIRE = 5
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.S)
+# Models sometimes copy the profile's display form, "gym (routine)", as the subject.
+_KIND_SUFFIX = re.compile(r"\s*\((?:%s)\)\s*$" % "|".join(KINDS), re.I)
+
+
+def _subject(text: object) -> str:
+    return _KIND_SUFFIX.sub("", str(text or "")).strip()
 
 
 def build_extraction_messages(
@@ -87,7 +97,7 @@ def apply_extraction(store: ProfileStore, reply: str) -> int:
         kind = str(item.get("kind") or "fact")
         action = store.remember(
             kind if kind in KINDS else "fact",
-            str(item.get("subject") or ""),
+            _subject(item.get("subject")),
             str(item.get("value") or ""),
             email=(str(item["email"]) if item.get("email") else None),
             source="learned",
@@ -97,7 +107,7 @@ def apply_extraction(store: ProfileStore, reply: str) -> int:
     retire = data.get("retire")
     for subject in (retire if isinstance(retire, list) else [])[:MAX_RETIRE]:
         if isinstance(subject, str):
-            written += store.retire(subject) > 0
+            written += store.retire(_subject(subject)) > 0
     return written
 
 

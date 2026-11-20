@@ -143,3 +143,14 @@ def test_last_poke_reply_and_learning_gets_it(profile, monkeypatch):
 
     asyncio.run(learn.learn_from_message("she's my sister", "user", "Sarah, about Sunday dinner.", complete=fake))
     assert "Sarah, about Sunday dinner." in seen[0]
+
+
+def test_extraction_strips_a_copied_kind_suffix(profile):
+    from server.services.profile import learn
+
+    profile.remember("routine", "gym", "Mon/Wed/Fri 7am")
+    profile.remember("place", "home city", "Vancouver")
+    reply = json.dumps({"facts": [{"kind": "place", "subject": "home city (place)", "value": "Toronto"}],
+                        "retire": ["gym (routine)"]})
+    assert learn.apply_extraction(profile, reply) == 2
+    assert [(f.subject, f.value) for f in profile.current()] == [("home city", "Toronto")]

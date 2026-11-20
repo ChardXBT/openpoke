@@ -59,3 +59,13 @@ def test_v1_sees_only_the_message_and_summary_counts():
     summary = mem.summarize([row, {**row, "passed": True, "group": "negative", "case": "n1"}])
     assert summary["fake v1"]["n"] == 2 and summary["fake v1"]["false_write_rate"] == 0.0
     assert "| fake v1 |" in mem.report(summary)
+
+
+def test_heldout_cases_are_frozen_and_distinct():
+    from evals.memory.cases_heldout import HELDOUT_CASES
+
+    assert mem.heldout_hash_ok(HELDOUT_CASES)
+    assert not mem.heldout_hash_ok(HELDOUT_CASES[:-1])
+    dev_messages = {c["message"] for c in CASES}
+    assert not dev_messages & {c["message"] for c in HELDOUT_CASES}
+    assert {c["id"] for c in CASES}.isdisjoint({c["id"] for c in HELDOUT_CASES})

@@ -114,7 +114,9 @@ CASES: list[dict] = [
     {"id": "c2", "group": "context",
      "context": "Want me to send it to Dr. Patel's office at frontdesk@smiles.example?",
      "message": "yes, that's my dentist",
-     "expect": [{"has": ["patel"], "subject": ["dentist"], "email": "frontdesk@smiles.example"}]},
+     # The address is only in Poke's message (it came from an email), so saving it is not required:
+     # a spoofed "dentist's office" must not become the address "email my dentist" uses.
+     "expect": [{"has": ["patel"], "subject": ["dentist"]}]},
     {"id": "c3", "group": "context", "context": "Should I remember that Alice Chen is your manager?",
      "message": "yes please", "expect": [{"has": ["alice"], "subject": ["boss", "manager"]}]},
     {"id": "c4", "group": "context", "context": "Done, I booked a table at Pai for 7pm.",
