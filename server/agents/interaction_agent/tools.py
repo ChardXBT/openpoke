@@ -11,6 +11,7 @@ from ...config import get_settings
 from ...logging_config import logger
 from ...services.conversation import get_conversation_log
 from ...services.execution import get_agent_roster, get_execution_agent_logs
+from ...services.execution import loops
 from ...services.execution.registry import AgentRecord, get_agent_registry, normalize_name
 from ...services.execution.resolver import OPEN_STATES, alias_phrase, is_irreversible
 from ...services.execution.search import search_agents as _search_agents
@@ -274,6 +275,8 @@ def _possible_duplicates(reg, agent_name: str, instructions: str, ctx: TurnConte
 
 def _learn_alias(reg, ctx: TurnContext, target_id: int, created: bool) -> None:
     """After a "which one?" question, the agent the work goes to learns the phrase the user used."""
+    if not ctx.message:  # agent results and email events are not the user answering
+        return
     pending = reg.pending_choice()
     if not pending or created or target_id not in pending.get("candidates", []):
         return
@@ -291,17 +294,23 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
     res = ctx.resolution
     target = reg.find(agent_name)
     irreversible = is_irreversible(instructions)
+    # The model can word "send it" as "proceed with the draft"; when the target is one of the
+    # ambiguous candidates, the user's own words decide whether the step is irreversible.
+    user_irreversible = bool(ctx.message) and is_irreversible(ctx.message)
     is_send = irreversible and bool(_SEND_ACTION.search(instructions.casefold()))
     if not ctx.enforce:  # ablation: plain reuse-or-create with #id/normalized lookup only
-        irreversible = is_send = False
+        irreversible = is_send = user_irreversible = False
         create_new = True
 
     # 1. Ambiguity contract: never guess on a step that cannot be undone. Candidates that
     #    the action cannot apply to (sending something with no draft, cancelling something
     #    with no reminder) are not real alternatives.
-    if res.kind == "ambiguous" and irreversible and (target is None or target.id not in ctx.created):
+    on_candidate = target is not None and target.id in res.candidates
+    if res.kind == "ambiguous" and (irreversible or (user_irreversible and on_candidate)) and (
+        target is None or target.id not in ctx.created
+    ):
         candidates = reg.get_many(res.candidates)
-        states = _action_states(instructions)
+        states = _action_states(instructions) or (_action_states(ctx.message) if ctx.message else None)
         fitting = [c for c in candidates if states is None or c.state in states] or candidates
         if target is not None and [c.id for c in fitting] == [target.id]:
             fitting = []  # the only candidate the action fits is the one chosen: no real ambiguity
@@ -383,7 +392,7 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
     canonical = target.name
     _learn_alias(reg, ctx, target.id, created)
     # Visible as "working now" immediately, so later calls this turn see it as open work.
-    reg.touch(target.id, state="running")
+    loops.mark_running(reg, target.id)
     roster = get_agent_roster()
     roster.load()
     roster.add_agent(canonical)
@@ -408,13 +417,20 @@ def send_message_to_agent(agent_name: str, instructions: str, create_new: bool =
     """Send instructions to an execution agent."""
     if not _reference_mode():
         return _legacy_send_message_to_agent(agent_name, instructions)
-    return _reference_send_message_to_agent(agent_name, instructions, create_new=bool(create_new))
+    return _reference_send_message_to_agent(agent_name, instructions, create_new=_as_bool(create_new))
+
+
+def _as_bool(value: Any) -> bool:
+    """Models sometimes send booleans as strings: "false" must not mean True."""
+    if isinstance(value, str):
+        return value.strip().casefold() in {"true", "1", "yes"}
+    return bool(value)
 
 
 def search_agents(query: str, include_archived: bool = False) -> ToolResult:
     """Search every execution agent and return one-line cards."""
     reg = get_agent_registry()
-    hits = _search_agents(reg, query, include_archived=bool(include_archived), limit=8)
+    hits = _search_agents(reg, query, include_archived=_as_bool(include_archived), limit=8)
     now = reg.clock()
     cards = []
     for hit in hits:

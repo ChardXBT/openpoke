@@ -52,3 +52,19 @@ def test_stale_pending_choice_is_ignored(routing):
     routing.reg.set_meta("pending_choice", '{"phrase": "alice thing", "candidates": [1, 2], "at": "2026-11-01T00:00:00Z"}')
     _turn(routing, "the q3 deck one", "#1", "Send the Q3 deck draft now.")
     assert all(r.kind != "alias" for r in routing.reg.refs(1))
+
+
+def test_agent_message_turn_does_not_answer_the_question(routing):
+    """Between "which one?" and the user's answer, an agent result or email routes work to one
+    candidate. That is not the user's answer and must not teach the alias."""
+    renewal = _second_alice_draft(routing)
+    _turn(routing, "ok send the alice thing", "#1", "Send the draft now.")
+    assert renewal in routing.reg.pending_choice()["candidates"]
+    ctx = build_turn_context("[SUCCESS] Alice – Acme renewal: redlines attached to the draft", "", "agent")
+    token = current_turn.set(ctx)
+    try:
+        routing.tools_mod.send_message_to_agent(f"#{renewal}", "Attach the latest redlines to the draft.")
+    finally:
+        current_turn.reset(token)
+    assert all(r.kind != "alias" for r in routing.reg.refs(renewal))
+    assert routing.reg.pending_choice() is not None  # still waiting for the user's answer
