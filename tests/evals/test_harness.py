@@ -138,6 +138,8 @@ def test_grade_outcomes():
     assert grade(Decision("ASK", asked=True), _sc(Gold("agent", 1))) == "over_ask"
     assert grade(Decision("OTHER"), _sc(Gold("agent", 1))) == "other"
     assert grade(Decision("OTHER"), _sc(Gold("agent", 3), family=8)) == "correct"
+    assert grade(Decision("ASK", asked=True), _sc(Gold("agent", 3), family=8)) == "correct"
+    assert grade(Decision("NEW"), _sc(Gold("agent", 3), family=8)) == "duplicate"
 
 
 def test_bootstrap_and_paired_delta_deterministic():

@@ -58,8 +58,10 @@ def grade(decision: Decision, scenario: Scenario) -> str:
         if decision.kind in ("agent", "NEW"):
             return "missed_ask"
         return "other"
-    if scenario.family == INBOUND_FAMILY and decision.kind == "OTHER":
-        return "correct"  # told the user, created nothing, touched nothing wrong
+    if scenario.family == INBOUND_FAMILY and decision.kind in ("OTHER", "ASK"):
+        # Told the user (often offering a next step as a question), created nothing,
+        # touched nothing wrong: the right behaviour for a watcher notification.
+        return "correct"
     if decision.kind == "ASK":
         return "over_ask"
     if gold.kind == "NEW":
