@@ -202,3 +202,18 @@ def test_sending_the_draft_still_moves_on(reg):
     agent_id = loops.begin_run(reg, "Email to Alice", "anything else?")
     loops.finish_run(reg, agent_id, True, has_active_trigger=_no_triggers)
     assert reg.get(agent_id).state == "done"
+
+
+def test_a_reply_on_the_thread_closes_the_waiting_loop(reg):
+    from server.services.execution.loops import observe_reply
+
+    waiting, _ = reg.get_or_create("Alice – Thursday lunch")
+    reg.set_state(waiting.id, "waiting_on_others", "sent; waiting for reply")
+    reg.add_ref(waiting.id, "thread", "thr_lunch")
+    draft, _ = reg.get_or_create("Alice – Q3 deck")
+    reg.set_state(draft.id, "waiting_on_user", "draft awaiting your OK")
+    reg.add_ref(draft.id, "thread", "thr_lunch")
+    assert observe_reply(reg, "thr_lunch", "Alice Chen <alice@acme.com>", "Re: Thursday lunch") == [waiting.id]
+    assert reg.get(waiting.id).state == "done" and "replied: Re: Thursday lunch" in reg.get(waiting.id).state_note
+    assert reg.get(draft.id).state == "waiting_on_user"  # a draft waiting on the user is not closed by a reply
+    assert observe_reply(reg, None) == [] and observe_reply(reg, "thr_other") == []

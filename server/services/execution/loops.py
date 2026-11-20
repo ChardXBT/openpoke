@@ -202,6 +202,23 @@ def finish_run(
         reg.set_state(agent_id, "done")
 
 
+def observe_reply(reg: AgentRegistry, thread_id: Optional[str], sender: str = "", subject: str = "") -> list[int]:
+    """A reply arrived on a thread an agent was waiting on: that loop is closed.
+
+    Only the thread id (Gmail's own metadata) can close a loop, never the email's text. The agent
+    reopens as usual if the user asks it to answer. Returns the agents closed.
+    """
+    if not thread_id:
+        return []
+    closed = []
+    for rec in reg.owners("thread", thread_id):
+        if rec.state == "waiting_on_others":
+            who = _clean(sender, 60) or "they"
+            reg.set_state(rec.id, "done", f"{who} replied" + (f": {_clean(subject)}" if subject else ""))
+            closed.append(rec.id)
+    return closed
+
+
 def abandon_run(reg: AgentRegistry, name: str) -> None:
     """A run that timed out or never started must not stay "working now" forever."""
     record = reg.find(name)

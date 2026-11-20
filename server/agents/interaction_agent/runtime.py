@@ -116,6 +116,8 @@ class InteractionAgentRuntime:
         try:
             transcript_before = self._load_conversation_transcript()
             self.conversation_log.record_agent_message(agent_message)
+            if event is not None:
+                self._close_replied_loops(event)
 
             ctx = self._turn_context(agent_message, transcript_before, "agent", event)
             token = current_turn.set(ctx)
@@ -207,6 +209,18 @@ class InteractionAgentRuntime:
             logger.warning("Interaction loop exited without assistant content")
 
         return summary
+
+    def _close_replied_loops(self, event: EventMeta) -> None:
+        """A reply on a thread an agent was waiting on closes that open item (reference mode)."""
+        if self.settings.router_mode != "reference":
+            return
+        try:
+            from ...services.execution.loops import observe_reply
+            from ...services.execution.registry import get_agent_registry
+
+            observe_reply(get_agent_registry(), event.thread_id, event.sender or "", event.subject or "")
+        except Exception as exc:  # pragma: no cover - bookkeeping must never break a turn
+            logger.debug(f"loops: reply bookkeeping skipped: {exc}")
 
     def _learn_in_background(self, user_message: str, context: str = "") -> None:
         """Pick up lasting facts about the user from their own words, without adding latency."""
