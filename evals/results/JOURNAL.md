@@ -78,3 +78,23 @@ clarification: the model even wrote "the one you picked earlier" and still asked
 the corrections-memory feature that is not built); 2 are a needle the lexical search missed
 (new agent instead of the old airline one); 1 is a multi-dispatch turn the grader scores by
 its last dispatch.
+
+## Headline queue 1 (13:00–13:17)
+
+| Run | Model | Result | Cost |
+|---|---|---|---|
+| heldout-haiku-20k | Haiku | B2, Ours at 20,000 agents, 2 reps (Ours on pre-guard-fix code; superseded by `heldout-haiku-ours-final`) | ~$0.4 |
+| heldout-sonnet | Sonnet 5.5 | 30 and 1,000 complete for B0/B2/Ours; stopped by its $20 cap at 5,000 after 9 B0 turns | $21.87 |
+| heldout-b0-20k | Haiku | B0 at 20,000: cap hit after 10 turns, **6/10 correct (3 duplicates, 1 wrong reuse)**, $0.44/turn | $4.86 |
+| heldout-b1 | Haiku | B1 at 30/200/1,000: 97% / 94% / 94% | $0.53 |
+| heldout-ablation | Haiku | Ours at 1,000 without resolver 98%, without contract 94%, without related cards 90% (4 duplicates) | $0.39 |
+| heldout-gpt | GPT-6.1-terra (OpenAI) | B0 90%/90%, B2 81%/77%, Ours 90%/87% at 30/1,000; asked-when-ambiguous 33% / 0–33% / 67% | $3.06 (OpenAI) |
+
+Caps overshoot slightly (in-flight calls finish after the cap check): Sonnet ended at $21.87
+on a $20 cap. B0's cost at large rosters dominates: $0.18/turn at 1,000 and $0.68/turn at
+5,000 on Sonnet, versus ~$0.05 for Ours at every size.
+
+Sonnet 5.5 is strong enough that B0 holds 97% at 1,000 agents on these held-out scenarios;
+Ours is 94% / 90%. Read honestly: at ≤1,000 agents with a strong model, Ours is a cost and
+safety improvement, not an accuracy one. The ablation finding (resolver off scored higher)
+is checked against Ours on final code in queue 2 before drawing conclusions.
