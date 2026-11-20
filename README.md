@@ -12,7 +12,10 @@
 > - Design and plan: [`docs/superpowers/specs/`](docs/superpowers/specs/), [`docs/superpowers/plans/`](docs/superpowers/plans/)
 >
 > ```bash
-> python -m pytest                       # offline test suite, no keys needed
+> git clone https://github.com/ChardXBT/openpoke && cd openpoke && git checkout agent-overload
+> python3 -m venv .venv && source .venv/bin/activate   # Debian/Ubuntu: sudo apt install python3-venv first
+> pip install -r server/requirements.txt -r evals/requirements.txt pytest
+> python -m pytest                       # offline test suite, no keys needed (182 passed)
 > python -m evals.harness.runner --setups b0,b2,ours --split dev --sizes 30,1000 \
 >     --model anthropic/claude-haiku-5.5 --max-usd 2 --out evals/runs/try
 > python -m evals.harness.report evals/runs/try --out evals/runs/try/report
@@ -39,6 +42,7 @@ OpenPoke is a simplified, open-source take on [Interaction Company’s](https://
    git clone https://github.com/shlokkhemani/OpenPoke
    cd OpenPoke
    ```
+   (For this fork's reference-first routing, clone `https://github.com/ChardXBT/openpoke` instead and check out `agent-overload`.)
 2. **Create a shared env file.** Copy the template and open it in your editor:
    ```bash
    cp .env.example .env
@@ -57,7 +61,8 @@ OpenPoke is a simplified, open-source take on [Interaction Company’s](https://
    - Replace `your_composio_api_key_here` and `your_gmail_auth_config_id_here` in `.env`
 4. **(Required) Create and activate a Python 3.10+ virtualenv:**
    ```bash
-   # Ensure you're using Python 3.10+
+   # Ensure you're using Python 3.10+ (any 3.10+ works, e.g. `python3 -m venv .venv`;
+   # on Debian/Ubuntu install the venv module first: `sudo apt install python3-venv`)
    python3.10 -m venv .venv
    source .venv/bin/activate
    

@@ -87,7 +87,12 @@ never leak between scenarios.
 
 ## Results
 
-_Filled in from `evals/results/` after the headline runs._
+_Headline (held-out) results are filled in from `evals/results/` after the headline runs._
+
+Committed so far: dev-split runs `evals/results/dev-haiku-r1/` and `dev-haiku-r2/`
+(Haiku 5.5, 78 scenarios, 30/200/1,000 agents; numbers and what changed between them in
+`evals/results/JOURNAL.md`). r2 was tuned on these scenarios, so it is an upper bound.
+Regenerate any report offline from its rows: `python -m evals.harness.report evals/results/dev-haiku-r2 --out /tmp/r2`.
 
 ## Assumptions
 
