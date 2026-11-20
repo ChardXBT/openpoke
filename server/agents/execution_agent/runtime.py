@@ -10,6 +10,8 @@ from .tools import get_tool_schemas, get_tool_registry
 from ...config import get_settings
 from ...openrouter_client import request_chat_completion
 from ...logging_config import logger
+from ...services.execution import loops
+from ...services.execution.registry import get_agent_registry
 
 
 @dataclass
@@ -35,13 +37,27 @@ class ExecutionAgentRuntime:
         self.model = settings.execution_agent_model
         self.tool_registry = get_tool_registry(agent_name=agent_name)
         self.tool_schemas = get_tool_schemas()
+        # Open-loop tracking feeds the reference router; legacy mode stays upstream.
+        self._track_loops = settings.router_mode == "reference"
+        self._registry_id: Optional[int] = None
 
         if not self.api_key:
             raise ValueError("OpenRouter API key not configured. Set OPENROUTER_API_KEY environment variable.")
 
+    def _track(self, fn, *args) -> Optional[int]:
+        """Run a registry hook; never let bookkeeping fail the agent's real work."""
+        if not self._track_loops:
+            return None
+        try:
+            return fn(get_agent_registry(), *args)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"[{self.agent.name}] open-loop tracking failed: {exc}")
+            return None
+
     # Main execution loop for running agent with LLM calls and tool execution
     async def execute(self, instructions: str) -> ExecutionResult:
         """Execute the agent with given instructions."""
+        self._registry_id = self._track(loops.begin_run, self.agent.name, instructions)
         try:
             # Build system prompt with history
             system_prompt = self.agent.build_system_prompt_with_history()
@@ -98,6 +114,8 @@ class ExecutionAgentRuntime:
                     logger.info(f"[{self.agent.name}] Executing tool: {tool_name}")
 
                     success, result = await self._execute_tool(tool_name, tool_args)
+                    if self._registry_id is not None:
+                        self._track(loops.observe_tool_call, self._registry_id, tool_name, tool_args, result, success)
 
                     if success:
                         logger.info(f"[{self.agent.name}] Tool {tool_name} completed successfully")
@@ -127,6 +145,8 @@ class ExecutionAgentRuntime:
                 raise RuntimeError("LLM did not return a final response")
 
             self.agent.record_response(final_response)
+            if self._registry_id is not None:
+                self._track(loops.finish_run, self._registry_id, True)
 
             return ExecutionResult(
                 agent_name=self.agent.name,
@@ -140,6 +160,8 @@ class ExecutionAgentRuntime:
             error_msg = str(e)
             failure_text = f"Failed to complete task: {error_msg}"
             self.agent.record_response(f"Error: {error_msg}")
+            if self._registry_id is not None:
+                self._track(loops.finish_run, self._registry_id, False)
 
             return ExecutionResult(
                 agent_name=self.agent.name,
