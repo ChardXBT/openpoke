@@ -68,7 +68,8 @@ async def request_chat_completion(
             raise OpenRouterError("Missing ANTHROPIC_API_KEY")
         try:
             return await anthropic_chat_completion(api_key=key, model=model, messages=messages, system=system,
-                                                   tools=tools, max_tokens=max_tokens)
+                                                   tools=tools, max_tokens=max_tokens,
+                                                   workspace_id=settings.anthropic_workspace_id)
         except Exception as exc:
             raise OpenRouterError(f"Anthropic request failed: {exc}") from exc
 

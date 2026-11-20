@@ -99,6 +99,8 @@ class Settings(BaseModel):
     openai_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     # OPENPOKE_PROVIDER=anthropic: Claude directly through the Anthropic SDK with ANTHROPIC_API_KEY.
     anthropic_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY"))
+    # Needed when the key isn't scoped to a workspace (the API then asks for anthropic-workspace-id).
+    anthropic_workspace_id: Optional[str] = Field(default_factory=lambda: (os.getenv("ANTHROPIC_WORKSPACE_ID") or "").strip() or None)
     composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
 

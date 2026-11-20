@@ -113,6 +113,7 @@ async def anthropic_chat_completion(
     tools: Optional[List[Dict[str, Any]]] = None,
     max_tokens: int = 2048,
     client: Any = None,
+    workspace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     import anthropic
 
@@ -132,6 +133,7 @@ async def anthropic_chat_completion(
     thinking = _thinking_for(model)
     if thinking:
         params["thinking"] = thinking
-    client = client or anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0)
+    headers = {"anthropic-workspace-id": workspace_id} if workspace_id else None
+    client = client or anthropic.AsyncAnthropic(api_key=api_key, timeout=60.0, default_headers=headers)
     message = await client.messages.create(**params)
     return to_openai_response(message)
