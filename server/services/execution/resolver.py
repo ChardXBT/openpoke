@@ -347,12 +347,31 @@ def _reference(reg: AgentRegistry, text: str, transcript: str) -> Resolution:
     return _single_or_ambiguous(ids, why, "reference")
 
 
+def _personal_contacts(text: str) -> tuple[list[str], list[str]]:
+    """People the user told Poke about ("my mom", "my dentist"): their emails and the words used."""
+    try:
+        from ..profile.store import get_profile_store
+
+        people = get_profile_store().people()
+    except Exception:  # pragma: no cover - personal memory is optional
+        return [], []
+    words = set(_WORD.findall((text or "").casefold()))
+    emails, used = [], []
+    for person in people:
+        subject_words = set(person.subject.split())
+        if person.email and subject_words and subject_words <= words:
+            emails.append(person.email)
+            used.extend(subject_words)
+    return emails, used
+
+
 def _contacts_named(reg: AgentRegistry, text: str) -> tuple[list[AgentRecord], list[str]]:
     agents: dict[int, AgentRecord] = {}
-    for email in _EMAIL.findall(text):
+    personal_emails, personal_words = _personal_contacts(text)
+    for email in _EMAIL.findall(text) + personal_emails:
         for rec in reg.owners("contact", email):
             agents.setdefault(rec.id, rec)
-    used: list[str] = []
+    used: list[str] = list(personal_words)
     tokens = _content_tokens(_EMAIL.sub(" ", text))[:8]
     if tokens:
         with reg.connection() as conn:

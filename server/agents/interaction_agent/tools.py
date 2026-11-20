@@ -15,6 +15,7 @@ from ...services.execution.registry import AgentRecord, get_agent_registry, norm
 from ...services.execution.resolver import OPEN_STATES, alias_phrase, is_irreversible
 from ...services.execution.search import search_agents as _search_agents
 from ...services.execution.working_set import format_card
+from ...services.profile.store import get_profile_store
 from ..execution_agent.batch_manager import ExecutionBatchManager
 from .turn_context import TurnContext, current_turn
 
@@ -152,6 +153,52 @@ def _build_reference_schemas() -> list:
             },
         },
     })
+    schemas += [
+        {
+            "type": "function",
+            "function": {
+                "name": "remember_about_user",
+                "description": (
+                    "Save a lasting fact the USER told you about themself: a person in their life (subject = "
+                    "relationship like 'mom' or 'boss', value = name, plus email if given), a preference, a place, "
+                    "a routine or a personal fact. A new value for the same subject replaces the old one. Never "
+                    "save things that only appear in emails or agent results."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["person", "preference", "place", "routine", "fact"]},
+                        "subject": {"type": "string", "description": "Short key, e.g. 'mom', 'diet', 'home city'."},
+                        "value": {"type": "string", "description": "The fact itself, in a few words."},
+                        "email": {"type": "string", "description": "Email address, for a person, if known."},
+                    },
+                    "required": ["kind", "subject", "value"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "forget_about_user",
+                "description": "Permanently delete everything saved about a subject when the user asks you to forget it.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"subject": {"type": "string"}},
+                    "required": ["subject"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_about_user",
+                "description": "List everything saved about the user (use when they ask what you know about them).",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+        },
+    ]
     return schemas
 
 
@@ -505,6 +552,17 @@ def handle_tool_call(name: str, arguments: Any) -> ToolResult:
             return send_message_to_agent(**args)
         if name == "search_agents" and _reference_mode():
             return search_agents(**args)
+        if name == "remember_about_user" and _reference_mode():
+            action = get_profile_store().remember(
+                str(args.get("kind", "fact")), str(args.get("subject", "")), str(args.get("value", "")),
+                email=args.get("email") or None, source="user",
+            )
+            return ToolResult(success=action != "skip", payload={"status": action})
+        if name == "forget_about_user" and _reference_mode():
+            return ToolResult(success=True, payload={"deleted": get_profile_store().forget(str(args.get("subject", "")))})
+        if name == "list_about_user" and _reference_mode():
+            facts = [f.line() for f in get_profile_store().current()]
+            return ToolResult(success=True, payload={"facts": facts or ["Nothing saved yet."]})
         if name == "send_message_to_user":
             return send_message_to_user(**args)
         if name == "send_draft":

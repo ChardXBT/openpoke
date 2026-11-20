@@ -1,5 +1,6 @@
 """Interaction Agent Runtime - handles LLM calls for user and agent turns."""
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
@@ -8,6 +9,7 @@ from .agent import build_system_prompt, prepare_message_with_history
 from .tools import ToolResult, get_tool_schemas, handle_tool_call
 from .turn_context import build_turn_context, current_turn
 from ...services.execution.resolver import EventMeta
+from ...services.profile.learn import learn_from_message
 from ...config import get_settings
 from ...services.conversation import get_conversation_log, get_working_memory_log
 from ...openrouter_client import request_chat_completion
@@ -88,6 +90,8 @@ class InteractionAgentRuntime:
 
             if final_response and not summary.user_messages:
                 self.conversation_log.record_reply(final_response)
+
+            self._learn_in_background(user_message)
 
             return InteractionResult(
                 success=True,
@@ -203,6 +207,15 @@ class InteractionAgentRuntime:
             logger.warning("Interaction loop exited without assistant content")
 
         return summary
+
+    def _learn_in_background(self, user_message: str) -> None:
+        """Pick up lasting facts about the user from their own words, without adding latency."""
+        if self.settings.router_mode != "reference" or not self.settings.learn_enabled:
+            return
+        try:
+            asyncio.get_running_loop().create_task(learn_from_message(user_message, "user"))
+        except RuntimeError:  # pragma: no cover - no loop
+            pass
 
     def _turn_context(self, text, transcript, message_type, event):
         """Resolve the turn's references once (reference mode); never fail the turn over it."""

@@ -14,6 +14,7 @@ from server.agents.interaction_agent.agent import build_system_prompt, prepare_m
 from server.agents.interaction_agent.turn_context import TurnContext, build_turn_context, current_turn
 from server.services.execution.registry import AgentRegistry, use_registry
 from server.services.execution.resolver import EventMeta
+from server.services.profile.store import ProfileStore, use_profile_store
 
 ABLATIONS = frozenset({"resolver", "contract", "related"})
 
@@ -49,6 +50,8 @@ class Ours:
             raise ValueError(f"unknown ablations: {sorted(unknown)}")
         self.name = "ours" + "".join(f"-no_{a}" for a in sorted(self.ablate))
         self._bases: dict[tuple[int, int], AgentRegistry] = {}
+        # Routing scenarios carry no personal facts: an empty, private profile (never the real one).
+        self._profile = ProfileStore(Path(":memory:"))
         _install_eval_side_effects()
 
     def _base(self, world: World) -> AgentRegistry:
@@ -65,7 +68,7 @@ class Ours:
         if scenario.event is not None:
             event = EventMeta("email", scenario.event.thread_id, scenario.event.sender, scenario.event.subject)
 
-        with use_registry(reg):
+        with use_registry(reg), use_profile_store(self._profile):
             if "resolver" in self.ablate:
                 ctx = TurnContext(event=event)
             else:
@@ -80,7 +83,7 @@ class Ours:
         def handle_tool(name: str, args: dict) -> dict:
             if name not in ("send_message_to_agent", "search_agents"):
                 return simple_tool_result(name)
-            with use_registry(reg):
+            with use_registry(reg), use_profile_store(self._profile):
                 token = current_turn.set(ctx)
                 try:
                     result = tools_mod.handle_tool_call(name, args)

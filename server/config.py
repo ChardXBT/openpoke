@@ -118,6 +118,11 @@ class Settings(BaseModel):
         """Return documentation URL when docs are enabled."""
         return (self.docs_url or "/docs") if self.enable_docs else None
 
+    # Personal memory: learn lasting facts from the user's own messages (cheap model, background).
+    learn_enabled: bool = Field(default_factory=lambda: os.getenv("OPENPOKE_LEARN", "1") != "0")
+    memory_model: str = Field(default_factory=lambda: (os.getenv("OPENPOKE_MEMORY_MODEL") or (
+        "gpt-6-luna" if _env_provider() == "openai" else "anthropic/claude-haiku-5.5")).strip())
+
     @property
     def llm_api_key(self) -> Optional[str]:
         """API key for the active provider."""

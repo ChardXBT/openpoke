@@ -83,7 +83,8 @@ def routing(tmp_path, monkeypatch):
     state = {"mode": "reference"}
 
     def settings():
-        return Settings(openrouter_api_key="test-key", router_mode=state["mode"], conversation_summary_threshold=0)
+        return Settings(openrouter_api_key="test-key", router_mode=state["mode"], conversation_summary_threshold=0,
+                        learn_enabled=False, llm_provider="openrouter")
 
     for mod in (agent_mod, tools_mod, runtime_mod):
         monkeypatch.setattr(mod, "get_settings", settings)
@@ -100,6 +101,10 @@ def routing(tmp_path, monkeypatch):
     dispatched: list[tuple[str, str]] = []
     tools_mod.set_dispatcher(lambda name, instructions: dispatched.append((name, instructions)))
 
+    from server.services.profile.store import ProfileStore, _override as profile_override
+
+    profile_token = profile_override.set(ProfileStore(tmp_path / "profile-default.db"))
+
     class Env:
         pass
 
@@ -107,5 +112,6 @@ def routing(tmp_path, monkeypatch):
     env.reg, env.roster, env.chat, env.dispatched, env.state = reg, roster, chat, dispatched, state
     env.agent_mod, env.tools_mod, env.runtime_mod = agent_mod, tools_mod, runtime_mod
     yield env
+    profile_override.reset(profile_token)
     tools_mod.set_dispatcher(None)
     set_agent_registry(None)
