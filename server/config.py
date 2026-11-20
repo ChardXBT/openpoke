@@ -70,7 +70,9 @@ class Settings(BaseModel):
     app_version: str = Field(default=DEFAULT_APP_VERSION)
 
     # Server runtime
-    server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "0.0.0.0"))
+    # Localhost by default: the API has no auth and can read and send your email, so it must not
+    # be reachable from the network unless you choose that (OPENPOKE_HOST=0.0.0.0).
+    server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "127.0.0.1"))
     server_port: int = Field(default=_env_int("OPENPOKE_PORT", 8001))
 
     # LLM model selection. anthropic/claude-sonnet-4 is no longer served on
@@ -98,7 +100,10 @@ class Settings(BaseModel):
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
 
     # HTTP behaviour
-    cors_allow_origins_raw: str = Field(default=os.getenv("OPENPOKE_CORS_ALLOW_ORIGINS", "*"))
+    # Only the web UI's origin by default: with "*", any web page you visit could script your Poke.
+    # (The web UI calls the API server-side, so it needs no CORS at all.)
+    cors_allow_origins_raw: str = Field(
+        default=os.getenv("OPENPOKE_CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"))
     enable_docs: bool = Field(default=os.getenv("OPENPOKE_ENABLE_DOCS", "1") != "0")
     docs_url: Optional[str] = Field(default=os.getenv("OPENPOKE_DOCS_URL", "/docs"))
 
