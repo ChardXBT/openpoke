@@ -116,3 +116,9 @@ def test_contract_narrows_by_action_state(routing):
     # Two drafts: a send still fits both, so it is still blocked.
     blocked = _call(routing, AMBIGUOUS, "#1", "Send the draft.")
     assert blocked.payload["status"] == "needs_user_choice"
+
+
+def test_forwarding_from_a_finished_agent_is_not_challenged(routing):
+    # #4 is archived/done; drafts are waiting elsewhere. Forwarding its findings is fine.
+    result = _call(routing, UNRESOLVED, "#4", "Forward the visa checklist to linda@example.com.")
+    assert result.payload["status"] == "submitted"

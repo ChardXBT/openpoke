@@ -34,3 +34,29 @@ counts a correct answer from the card that ends with an offer as correct (all se
 Harness fixes found during r1 (affect all setups): pooled HTTP client (parallel calls were
 serialized by per-call SSL setup); "#15 Name" now resolves to agent 15 (models append the
 name; without this our router created an agent literally named "#15 Air Canada Refund").
+
+## dev-haiku-r2 (after the r1 fixes; same model, scenarios and sizes)
+
+Cost $2.89. Results: `evals/results/dev-haiku-r2/summary.md`.
+
+| Setup | 30 | 200 | 1,000 | Asked when ambiguous | Wrong reuse | Prompt tokens at 1,000 |
+|---|---|---|---|---|---|---|
+| B0 OpenPoke today | 96% | 95% | 91% | 75% | 1% | 51k |
+| B1 every card | 92% | 94% | 92% | 62–75% | 0–3% | 115k |
+| B2 common answer | 92% | 96% | 92% | 75% | 0–4% | 14k |
+| Ours | 99% | 97% | 95% | 100% | 0% | 19k |
+
+Tuned on these scenarios, so this is an upper bound; held-out decides.
+
+Remaining Ours misses at 1,000 and what was done:
+- "forward the Globex offer letter" to an archived agent was challenged by the
+  send-to-agent-without-draft rule; that rule now applies only to *sending a draft*.
+  (General bug; regression test added.)
+- "that japan food list" vs agent "Tokyo Ramen Search": no shared words; our search is
+  lexical. Known limit (B2's embeddings help here). Next step: optional embeddings.
+- "the alice thing" asked again after the user already chose: the corrections-memory
+  stretch (aliases) is not built.
+- "remind me about the hydro bill" → asked for the due date: a task-detail question the
+  grader counts as over-asking for every setup alike. Grading limitation, noted.
+
+Held-out set frozen by hash (`heldout.sha256`, 4249db74…) before any held-out run.

@@ -304,7 +304,10 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
                 "message": "The user's message most likely refers to this agent instead. Re-route, or ask the user.",
                 "suggested": _cards(reg, suggested),
             })
-        if res.kind == "unresolved" and is_send and target.state != "waiting_on_user":
+        # Only *sending a draft* needs an agent that holds one; forwarding or replying with
+        # new content from a finished agent is legitimate.
+        sends_draft = is_send and "draft" in instructions.casefold()
+        if res.kind == "unresolved" and sends_draft and target.state != "waiting_on_user":
             drafts = [r for r in reg.open_items(25) if r.state == "waiting_on_user"][:3]
             if drafts:
                 return ToolResult(success=False, payload={
