@@ -172,6 +172,8 @@ def _build_reference_schemas() -> list:
                         "subject": {"type": "string", "description": "Short key, e.g. 'mom', 'diet', 'home city'."},
                         "value": {"type": "string", "description": "The fact itself, in a few words."},
                         "email": {"type": "string", "description": "Email address, for a person, if known."},
+                        "until": {"type": "string", "description": "YYYY-MM-DD, only for a temporary fact "
+                                  "('in Lisbon until Friday'); it drops out after that day."},
                     },
                     "required": ["kind", "subject", "value"],
                     "additionalProperties": False,
@@ -571,7 +573,7 @@ def handle_tool_call(name: str, arguments: Any) -> ToolResult:
         if name == "remember_about_user" and _reference_mode():
             action = get_profile_store().remember(
                 str(args.get("kind", "fact")), str(args.get("subject", "")), str(args.get("value", "")),
-                email=args.get("email") or None, source="user",
+                email=args.get("email") or None, source="user", until=args.get("until") or None,
             )
             return ToolResult(success=action != "skip", payload={"status": action})
         if name == "forget_about_user" and _reference_mode():

@@ -3,7 +3,9 @@
 Each fact is (kind, subject, value[, email]). Writing follows the add / update / no-op
 pattern: the same subject with a new value supersedes the old one, which is kept with an
 ``invalid_at`` date instead of contradicting it (so "moved to Toronto" replaces Vancouver
-without losing when). ``forget`` hard-deletes a subject, history included.
+without losing when). A fact can also be temporary ("in Lisbon until Friday"): it is stored
+with a future ``invalid_at`` and drops out on its own. ``retire`` ends a fact that no longer
+holds (history kept); ``forget`` hard-deletes a subject, history included.
 
 Only things the user said (or confirmed) are written here: never email bodies or agent
 output, which are untrusted. The store is local SQLite next to the agent registry.
@@ -26,9 +28,20 @@ ALWAYS_SHOWN = ("preference", "routine")
 MAX_VALUE = 300
 MAX_ALWAYS = 8
 MAX_RELEVANT = 5
+SMALL_PROFILE = 15  # a profile this small is shown whole every turn
 
 _WORD = re.compile(r"[0-9a-z]+")
 _FILLER = frozenset("my the a an our".split())
+# One spelling per relationship, so "my mother" and "mom" are the same subject.
+_CANON = {"mother": "mom", "mum": "mom", "mommy": "mom", "mama": "mom", "mam": "mom",
+          "father": "dad", "daddy": "dad", "papa": "dad", "spouse": "partner"}
+# Words that point at the same person in a request ("email my wife" finds the partner).
+_RELATED = [
+    frozenset("partner wife husband girlfriend boyfriend gf bf fiance fiancee".split()),
+    frozenset("boss manager supervisor".split()),
+    frozenset("doctor gp physician".split()),
+]
+_NAME_STOP = frozenset("the and for with from dr mr mrs ms miss".split())
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (
@@ -50,9 +63,25 @@ def _now_iso(clock: Callable[[], datetime]) -> str:
 
 
 def subject_key(subject: str) -> str:
-    """'My Dentist' -> 'dentist'; 'Home City' -> 'home city'."""
-    words = [w for w in _WORD.findall((subject or "").casefold()) if w not in _FILLER]
+    """'My Dentist' -> 'dentist'; 'Home City' -> 'home city'; 'my mother' -> 'mom'."""
+    words = [_CANON.get(w, w) for w in _WORD.findall((subject or "").casefold()) if w not in _FILLER]
     return " ".join(words)
+
+
+def _until_iso(until: Optional[str]) -> Optional[str]:
+    """'2026-11-27' -> the end of that day (UTC); a full ISO time is kept; anything else -> None."""
+    text = (until or "").strip()
+    if not text:
+        return None
+    try:
+        if len(text) == 10:
+            moment = datetime.strptime(text, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+        else:
+            moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            moment = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass
@@ -66,9 +95,15 @@ class Fact:
     created_at: str
     invalid_at: Optional[str]
 
+    @property
+    def temporary(self) -> bool:
+        """A current fact with an end date (current facts never carry a past one)."""
+        return self.invalid_at is not None
+
     def line(self) -> str:
         email = f" <{self.email}>" if self.email else ""
-        return f"- {self.subject} ({self.kind}): {self.value}{email}"
+        until = f" (until {self.invalid_at[:10]})" if self.invalid_at else ""
+        return f"- {self.subject} ({self.kind}): {self.value}{email}{until}"
 
 
 def _row(r: sqlite3.Row) -> Fact:
@@ -92,8 +127,9 @@ class ProfileStore:
             yield self._conn
 
     # ------------------------------------------------------------------ writes
-    def remember(self, kind: str, subject: str, value: str, email: Optional[str] = None, source: str = "user") -> str:
-        """Returns "add", "update", "noop" or "skip"."""
+    def remember(self, kind: str, subject: str, value: str, email: Optional[str] = None, source: str = "user",
+                 until: Optional[str] = None) -> str:
+        """Returns "add", "update", "noop" or "skip". ``until`` (a date) makes the fact temporary."""
         key = subject_key(subject)
         text = " ".join((value or "").split())[:MAX_VALUE]
         if not key or not text:
@@ -101,23 +137,40 @@ class ProfileStore:
         kind = kind if kind in KINDS else "fact"
         mail = (email or "").strip().casefold() or None
         now = _now_iso(self._clock)
+        ends = _until_iso(until)
+        if until and (ends is None or ends <= now):
+            return "skip"  # an unreadable or already-past end date
         with self._db() as conn:
             current = conn.execute(
-                "SELECT * FROM facts WHERE subject = ? AND invalid_at IS NULL ORDER BY id DESC", (key,)
+                "SELECT * FROM facts WHERE subject = ? AND (invalid_at IS NULL OR invalid_at > ?) ORDER BY id DESC",
+                (key, now),
             ).fetchone()
             if current is not None:
                 same_value = current["value"].casefold() == text.casefold()
                 same_mail = (current["email"] or None) == mail or mail is None
-                if same_value and same_mail:
+                if same_value and same_mail and current["invalid_at"] == ends:
                     return "noop"
                 conn.execute("UPDATE facts SET invalid_at = ? WHERE id = ?", (now, current["id"]))
                 if mail is None:
                     mail = current["email"]
             conn.execute(
-                "INSERT INTO facts (kind, subject, value, email, source, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (kind, key, text, mail, source, now),
+                "INSERT INTO facts (kind, subject, value, email, source, created_at, invalid_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (kind, key, text, mail, source, now, ends),
             )
         return "update" if current is not None else "add"
+
+    def retire(self, subject: str) -> int:
+        """End a subject's current fact because it no longer holds; its history is kept."""
+        key = subject_key(subject)
+        if not key:
+            return 0
+        now = _now_iso(self._clock)
+        with self._db() as conn:
+            return conn.execute(
+                "UPDATE facts SET invalid_at = ? WHERE subject = ? AND (invalid_at IS NULL OR invalid_at > ?)",
+                (now, key, now),
+            ).rowcount
 
     def forget(self, subject: str) -> int:
         key = subject_key(subject)
@@ -128,8 +181,11 @@ class ProfileStore:
 
     # ------------------------------------------------------------------ reads
     def current(self) -> list[Fact]:
+        now = _now_iso(self._clock)
         with self._db() as conn:
-            rows = conn.execute("SELECT * FROM facts WHERE invalid_at IS NULL ORDER BY id").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM facts WHERE invalid_at IS NULL OR invalid_at > ? ORDER BY id", (now,)
+            ).fetchall()
         return [_row(r) for r in rows]
 
     def history(self, subject: str) -> list[Fact]:
@@ -138,24 +194,30 @@ class ProfileStore:
         return [_row(r) for r in rows]
 
     def person(self, subject: str) -> Optional[Fact]:
-        with self._db() as conn:
-            row = conn.execute(
-                "SELECT * FROM facts WHERE subject = ? AND kind = 'person' AND invalid_at IS NULL ORDER BY id DESC",
-                (subject_key(subject),),
-            ).fetchone()
-        return _row(row) if row else None
+        key = subject_key(subject)
+        matches = [f for f in self.current() if f.kind == "person" and f.subject == key]
+        return matches[-1] if matches else None
 
     def people(self) -> list[Fact]:
         return [f for f in self.current() if f.kind == "person"]
 
     def relevant(self, text: str, limit: int = MAX_RELEVANT) -> list[Fact]:
-        """Current facts whose subject (or a word of it) or email appears in ``text``."""
-        words = set(_WORD.findall((text or "").casefold()))
+        """Current facts the message points at: by subject ("my mother" finds mom, "my wife" the
+        partner), by a person's name ("email Sarah" finds the sister) or by email address."""
         lowered = (text or "").casefold()
+        tokens = [_CANON.get(w, w) for w in _WORD.findall(lowered)]
+        words = set(tokens)
+        for group in _RELATED:
+            if words & group:
+                words |= group
+        padded = f" {' '.join(tokens)} "
         scored = []
         for fact in self.current():
             subject_words = set(fact.subject.split())
-            hits = len(subject_words & words) + (2 if fact.subject in lowered else 0)
+            hits = len(subject_words & words) + (2 if f" {fact.subject} " in padded else 0)
+            if fact.kind == "person":
+                names = {w for w in _WORD.findall(fact.value.casefold()) if len(w) >= 3 and w not in _NAME_STOP}
+                hits += 2 * len(names & words)
             if fact.email and fact.email in lowered:
                 hits += 3
             if hits:
@@ -168,7 +230,9 @@ class ProfileStore:
         facts = self.current()
         if not facts:
             return "None"
-        always = [f for f in reversed(facts) if f.kind in ALWAYS_SHOWN][:MAX_ALWAYS]
+        if len(facts) <= SMALL_PROFILE:
+            return "\n".join(f.line() for f in facts)
+        always = [f for f in reversed(facts) if f.kind in ALWAYS_SHOWN or f.temporary][:MAX_ALWAYS]
         shown = {f.id for f in always}
         relevant = [f for f in self.relevant(text) if f.id not in shown]
         lines = [f.line() for f in always + relevant]

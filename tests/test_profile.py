@@ -81,3 +81,59 @@ def test_rejects_empty_and_overlong(store):
 def test_kind_is_validated(store):
     assert store.remember("nonsense", "hobby", "climbing") == "add"
     assert store.current()[0].kind == "fact"
+
+
+def test_relationship_spellings_share_one_subject(store):
+    assert store.remember("person", "my mother", "Linda") == "add"
+    assert store.remember("person", "Mom", "Linda Song", email="linda@x.com") == "update"
+    assert store.person("mum").value == "Linda Song"
+    assert [f.subject for f in store.current()] == ["mom"]
+
+
+def test_relevant_by_name_related_word_and_email(store):
+    store.remember("person", "sister", "Sarah Kim", email="sarah.kim@x.com")
+    store.remember("person", "partner", "Jordan Lee")
+    store.remember("person", "boss", "Dr. Priya Shah")
+    for i in range(20):
+        store.remember("fact", f"misc {i}", f"value {i}")
+
+    def subjects(text):
+        return [f.subject for f in store.relevant(text)]
+
+    assert subjects("email Sarah about the cabin")[0] == "sister"
+    assert subjects("ask my wife if Saturday works")[0] == "partner"
+    assert subjects("tell my manager I'm out")[0] == "boss"
+    assert subjects("what did my mother say") == []  # no mom on file: nothing, not a guess
+    assert subjects("forward it to sarah.kim@x.com")[0] == "sister"
+    assert "dr" not in {w for f in store.relevant("dr appointment") for w in f.subject.split()}
+
+
+def test_temporary_fact_shows_until_then_drops_out(store, clock):
+    assert store.remember("place", "current location", "Lisbon", until="2026-11-22") == "add"
+    assert store.current()[0].line() == "- current location (place): Lisbon (until 2026-11-22)"
+    assert store.remember("place", "current location", "Lisbon", until="2026-11-22") == "noop"
+    assert store.remember("place", "trip", "Paris", until="2026-11-01") == "skip"  # already over
+    assert store.remember("place", "trip", "Paris", until="next friday") == "skip"  # unreadable
+    clock.now += timedelta(days=3)
+    assert store.current() == []
+    assert [f.value for f in store.history("current location")] == ["Lisbon"]
+    assert store.remember("place", "current location", "Porto") == "add"  # expired: a fresh fact
+
+
+def test_retire_ends_a_fact_but_keeps_history(store, clock):
+    store.remember("fact", "job", "engineer at Shopify")
+    clock.now += timedelta(days=1)
+    assert store.retire("my job") == 1
+    assert store.current() == [] and len(store.history("job")) == 1
+    assert store.retire("job") == 0
+
+
+def test_small_profile_is_shown_whole_and_temporary_facts_always(store):
+    store.remember("place", "home city", "Toronto")
+    store.remember("fact", "school", "University of Toronto")
+    block = store.render_block("hi")
+    assert "Toronto" in block and "University of Toronto" in block
+    for i in range(20):
+        store.remember("fact", f"misc {i}", f"value {i}")
+    store.remember("place", "current location", "Lisbon", until="2026-11-25")
+    assert "Lisbon (until 2026-11-25)" in store.render_block("hi")
