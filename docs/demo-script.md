@@ -10,7 +10,7 @@ from that run.
 In `.env`, next to your key:
 
 ```bash
-OPENPOKE_PROVIDER=openai        # or leave it out and use OPENROUTER_API_KEY
+OPENPOKE_PROVIDER=openai        # or anthropic (ANTHROPIC_API_KEY), or leave it out for OPENROUTER_API_KEY
 OPENPOKE_FAKE_GMAIL=1
 ```
 

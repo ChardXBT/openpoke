@@ -101,7 +101,8 @@ relays an email confirms nothing.
 
 ## Try it
 
-You need Python 3.10+, Node 18+ and one model key: OpenRouter, or OpenAI.
+You need Python 3.10+, Node 18+ and one model key: OpenRouter, OpenAI, or Anthropic
+(`OPENPOKE_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`).
 
 ```bash
 git clone https://github.com/ChardXBT/openpoke && cd openpoke

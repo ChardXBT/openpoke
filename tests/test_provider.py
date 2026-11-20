@@ -60,3 +60,62 @@ def test_openrouter_provider_request(monkeypatch):
     assert seen["url"].startswith("https://openrouter.ai/")
     assert seen["headers"]["Authorization"] == "Bearer or-key"
     assert seen["payload"]["max_tokens"] == 50
+
+
+def test_anthropic_provider_translates_both_ways():
+    import asyncio
+    import json
+    from types import SimpleNamespace as NS
+
+    from server.openrouter_client.anthropic_provider import anthropic_chat_completion
+
+    sent = {}
+
+    class FakeMessages:
+        async def create(self, **params):
+            sent.update(params)
+            return NS(id="msg_1", model=params["model"], stop_reason="tool_use",
+                      usage=NS(input_tokens=120, output_tokens=30),
+                      content=[NS(type="thinking", thinking=""), NS(type="text", text="On it."),
+                               NS(type="tool_use", id="tu_2", name="send_message_to_agent",
+                                  input={"agent_name": "#1", "instructions": "send"})])
+
+    history = [
+        {"role": "user", "content": "send it"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "tu_1", "type": "function", "function": {"name": "search_agents", "arguments": '{"query": "alice"}'}}]},
+        {"role": "tool", "tool_call_id": "tu_1", "content": '{"results": []}'},
+    ]
+    tools = [{"type": "function", "function": {"name": "send_message_to_agent", "description": "d",
+                                               "parameters": {"type": "object", "properties": {}}}}]
+    out = asyncio.run(anthropic_chat_completion(api_key="k", model="claude-sonnet-5-5", messages=history,
+                                                system="SYS", tools=tools, max_tokens=500,
+                                                client=NS(messages=FakeMessages())))
+    assert sent["system"] == "SYS" and sent["thinking"] == {"type": "between_tools"}
+    assert sent["tools"][0]["input_schema"] == {"type": "object", "properties": {}}
+    assert [m["role"] for m in sent["messages"]] == ["user", "assistant", "user"]
+    assert sent["messages"][1]["content"][0] == {"type": "tool_use", "id": "tu_1", "name": "search_agents",
+                                                 "input": {"query": "alice"}}
+    assert sent["messages"][2]["content"][0]["type"] == "tool_result"
+    assert "temperature" not in sent
+    msg = out["choices"][0]["message"]
+    assert msg["content"] == "On it." and msg["tool_calls"][0]["id"] == "tu_2"
+    assert json.loads(msg["tool_calls"][0]["function"]["arguments"])["agent_name"] == "#1"
+    assert out["usage"] == {"prompt_tokens": 120, "completion_tokens": 30}
+
+
+def test_anthropic_provider_settings(monkeypatch):
+    import importlib
+
+    import server.config as config
+
+    monkeypatch.setenv("OPENPOKE_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("OPENPOKE_MODEL", raising=False)
+    monkeypatch.delenv("OPENPOKE_MEMORY_MODEL", raising=False)
+    importlib.reload(config)
+    s = config.Settings()
+    assert s.llm_provider == "anthropic" and s.llm_api_key == "sk-test"
+    assert s.interaction_agent_model == "claude-sonnet-5-5" and s.memory_model == "claude-haiku-5-5"
+    monkeypatch.delenv("OPENPOKE_PROVIDER")
+    importlib.reload(config)

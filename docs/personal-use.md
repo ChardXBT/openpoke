@@ -19,9 +19,10 @@ Put one model key in `.env`:
 |---|---|---|
 | An OpenRouter key | `OPENROUTER_API_KEY=...` | `anthropic/claude-sonnet-5.5` |
 | An OpenAI key | `OPENPOKE_PROVIDER=openai` and `OPENAI_API_KEY=...` | `gpt-6.1-terra` |
+| An Anthropic key | `OPENPOKE_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...` | `claude-sonnet-5-5` |
 
 `OPENPOKE_MODEL` picks any other model on that provider. The memory learner runs on a small model
-(`claude-haiku-5.5` or `gpt-6-luna`; `OPENPOKE_MEMORY_MODEL` to change it).
+(Haiku 5.5 or `gpt-6-luna`; `OPENPOKE_MEMORY_MODEL` to change it).
 
 To try it without connecting your real inbox, add `OPENPOKE_FAKE_GMAIL=1`. Poke then uses a local
 demo mailbox (Alice's Q3 deck and lunch threads, Bob's invoice, an Air Canada refund, a lease

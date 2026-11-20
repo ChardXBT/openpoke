@@ -41,8 +41,9 @@ def _env_int(name: str, fallback: int) -> int:
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
 DEFAULT_OPENAI_MODEL = "gpt-6.1-terra"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
 ROUTER_MODES = ("reference", "legacy")
-PROVIDERS = ("openrouter", "openai")
+PROVIDERS = ("openrouter", "openai", "anthropic")
 
 
 def _env_provider() -> str:
@@ -54,7 +55,7 @@ def _env_model() -> str:
     explicit = (os.getenv("OPENPOKE_MODEL") or "").strip()
     if explicit:
         return explicit
-    return DEFAULT_OPENAI_MODEL if _env_provider() == "openai" else DEFAULT_MODEL
+    return {"openai": DEFAULT_OPENAI_MODEL, "anthropic": DEFAULT_ANTHROPIC_MODEL}.get(_env_provider(), DEFAULT_MODEL)
 
 
 def _env_router_mode() -> str:
@@ -96,6 +97,8 @@ class Settings(BaseModel):
     # LLM provider: "openrouter" (default) or "openai" (OpenAI API directly with OPENAI_API_KEY).
     llm_provider: str = Field(default_factory=lambda: _env_provider())
     openai_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
+    # OPENPOKE_PROVIDER=anthropic: Claude directly through the Anthropic SDK with ANTHROPIC_API_KEY.
+    anthropic_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY"))
     composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
 
@@ -128,12 +131,13 @@ class Settings(BaseModel):
     # Demo mailbox: a local fake Gmail (nothing is sent anywhere); OPENPOKE_FAKE_GMAIL=1.
     fake_gmail: bool = Field(default_factory=lambda: os.getenv("OPENPOKE_FAKE_GMAIL", "0") == "1")
     memory_model: str = Field(default_factory=lambda: (os.getenv("OPENPOKE_MEMORY_MODEL") or (
-        "gpt-6-luna" if _env_provider() == "openai" else "anthropic/claude-haiku-5.5")).strip())
+        {"openai": "gpt-6-luna", "anthropic": "claude-haiku-5-5"}.get(_env_provider(), "anthropic/claude-haiku-5.5"))).strip())
 
     @property
     def llm_api_key(self) -> Optional[str]:
         """API key for the active provider."""
-        return self.openai_api_key if self.llm_provider == "openai" else self.openrouter_api_key
+        return {"openai": self.openai_api_key, "anthropic": self.anthropic_api_key}.get(
+            self.llm_provider, self.openrouter_api_key)
 
     @property
     def summarization_enabled(self) -> bool:

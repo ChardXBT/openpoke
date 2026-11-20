@@ -60,6 +60,18 @@ async def request_chat_completion(
     """Request a chat completion and return the raw JSON payload."""
 
     settings = get_settings()
+    if settings.llm_provider == "anthropic":
+        from .anthropic_provider import anthropic_chat_completion
+
+        key = (api_key or settings.llm_api_key or "").strip()
+        if not key:
+            raise OpenRouterError("Missing ANTHROPIC_API_KEY")
+        try:
+            return await anthropic_chat_completion(api_key=key, model=model, messages=messages, system=system,
+                                                   tools=tools, max_tokens=max_tokens)
+        except Exception as exc:
+            raise OpenRouterError(f"Anthropic request failed: {exc}") from exc
+
     payload: Dict[str, object] = {
         "model": model,
         "messages": _build_messages(messages, system),
