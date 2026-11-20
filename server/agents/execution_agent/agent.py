@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from ...config import get_settings
 from ...services.execution import get_execution_agent_logs
 from ...logging_config import logger
 
@@ -43,10 +44,15 @@ class ExecutionAgent:
 
         Args:
             name: Human-readable agent name (e.g., 'conversation with keith')
-            conversation_limit: Optional limit on past conversations to include (None = all)
+            conversation_limit: Past requests to include. None uses the configured default;
+                zero or a negative value includes all history.
         """
         self.name = name
-        self.conversation_limit = conversation_limit
+        self.conversation_limit = (
+            get_settings().execution_history_limit
+            if conversation_limit is None
+            else conversation_limit
+        )
         self._log_store = get_execution_agent_logs()
 
     # Generate system prompt template with agent name and purpose derived from name

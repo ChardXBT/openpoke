@@ -3,13 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from .runtime import ExecutionAgentRuntime, ExecutionResult
 from ...logging_config import logger
+
+
+_agent_locks: dict[
+    str,
+    weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock],
+] = {}
+_agent_locks_guard = threading.Lock()
+
+
+def _get_agent_lock(agent_name: str) -> asyncio.Lock:
+    """Return the shared lock for an agent in the current event loop."""
+
+    loop = asyncio.get_running_loop()
+    with _agent_locks_guard:
+        locks_by_loop = _agent_locks.setdefault(agent_name, weakref.WeakKeyDictionary())
+        lock = locks_by_loop.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks_by_loop[loop] = lock
+        return lock
 
 
 @dataclass
@@ -58,30 +80,35 @@ class ExecutionBatchManager:
         batch_id = await self._register_pending_execution(agent_name, instructions, request_id)
 
         try:
-            logger.info(f"[{agent_name}] Execution started")
-            runtime = ExecutionAgentRuntime(agent_name=agent_name)
-            result = await asyncio.wait_for(
-                runtime.execute(instructions),
-                timeout=self.timeout_seconds,
-            )
-            status = "SUCCESS" if result.success else "FAILED"
-            logger.info(f"[{agent_name}] Execution finished: {status}")
-        except asyncio.TimeoutError:
-            logger.error(f"[{agent_name}] Execution timed out after {self.timeout_seconds}s")
-            result = ExecutionResult(
-                agent_name=agent_name,
-                success=False,
-                response=f"Execution timed out after {self.timeout_seconds} seconds",
-                error="Timeout",
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception(f"[{agent_name}] Execution failed unexpectedly")
-            result = ExecutionResult(
-                agent_name=agent_name,
-                success=False,
-                response=f"Execution failed: {exc}",
-                error=str(exc),
-            )
+            agent_lock = _get_agent_lock(agent_name)
+            async with agent_lock:
+                try:
+                    logger.info(f"[{agent_name}] Execution started")
+                    runtime = ExecutionAgentRuntime(agent_name=agent_name)
+                    result = await asyncio.wait_for(
+                        runtime.execute(instructions),
+                        timeout=self.timeout_seconds,
+                    )
+                    status = "SUCCESS" if result.success else "FAILED"
+                    logger.info(f"[{agent_name}] Execution finished: {status}")
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"[{agent_name}] Execution timed out after {self.timeout_seconds}s"
+                    )
+                    result = ExecutionResult(
+                        agent_name=agent_name,
+                        success=False,
+                        response=f"Execution timed out after {self.timeout_seconds} seconds",
+                        error="Timeout",
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.exception(f"[{agent_name}] Execution failed unexpectedly")
+                    result = ExecutionResult(
+                        agent_name=agent_name,
+                        success=False,
+                        response=f"Execution failed: {exc}",
+                        error=str(exc),
+                    )
         finally:
             self._pending.pop(request_id, None)
 
