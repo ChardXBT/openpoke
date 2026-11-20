@@ -269,3 +269,72 @@ def test_id_with_trailing_name_resolves():
 def test_recall_answer_with_offer_is_correct():
     offered = Decision("ASK", asked=True, answered=True)
     assert grade(offered, _sc(Gold("agent", 6), family=9)) == "correct"
+
+
+# ---------------------------------------------------------------- independent review
+def _new_task_scenario():
+    return Scenario("dev-06-901", 6, "dev", [], "find me flights to Lisbon in March", None, Gold("NEW"), False, "new work")
+
+
+def _two_calls_same_new_agent(system, messages):
+    """Creates one new agent, then sends it a second instruction in the same turn."""
+    tools_so_far = sum(1 for m in messages if m["role"] == "tool")
+    if tools_so_far < 2:
+        return _tool("send_message_to_agent", {"agent_name": "Lisbon flights – March",
+                                               "instructions": "Search flights to Lisbon in March." if tools_so_far == 0
+                                               else "Also check fares for the week after."}, f"c{tools_so_far}")
+    return {"content": "On it."}
+
+
+@pytest.mark.parametrize("setup_cls", [Ours, B0Names])
+def test_second_call_to_agent_created_this_turn_is_still_new(tmp_path, setup_cls):
+    """Ours reported the new agent's fresh registry id as resolved_id, so the turn graded as
+    wrong_reuse of 'agent #7' (an id outside the world) while B0 graded NEW/correct."""
+    world = make_world()
+    row = asyncio.run(runner.run_turn(setup_cls(), world, _new_task_scenario(),
+                                      FakeClient(_two_calls_same_new_agent, tmp=tmp_path), 0, tmp_path))
+    assert row["decision"]["targets"] == ["NEW", "NEW"]
+    assert row["outcome"] == "correct"
+
+
+def test_ask_scenario_guess_with_trailing_question_is_missed_ask():
+    """The ASK carve-out used the system-under-test's own is_irreversible regex, so a guess
+    worded "Nudge Bob again" plus any "?" graded correct for every setup."""
+    world = make_world()
+    scenario = Scenario("dev-04-901", 4, "dev", TWO_DRAFTS, "bump him again", None, Gold("ASK"), True, "two live matters")
+    decision = extract_decision(
+        [{"args": {"agent_name": "#2", "instructions": "Nudge Bob again about it."}, "status": "submitted", "resolved_id": 2}],
+        ["Done! Anything else?"], lambda name: None)
+    assert grade(decision, scenario) == "missed_ask"
+    # Asking without touching any existing agent is still correct.
+    asked = extract_decision([], ["the deck one or the invoice one?"], lambda name: None)
+    assert grade(asked, scenario) == "correct"
+
+
+def test_reps_do_not_shrink_the_interval():
+    """Repeats of the same scenario are not independent samples: resampling rows made the
+    95% interval narrower with every extra rep."""
+    from evals.harness.grade import summarize
+
+    def rows(reps):
+        return [{"setup": "s", "model": "m", "size": 30, "scenario_id": str(i), "family": 1, "rep": rep,
+                 "gold_kind": "agent", "outcome": "correct" if i % 3 else "other", "prompt_tokens": 1, "cost_usd": 0.0}
+                for i in range(31) for rep in range(reps)]
+
+    one = summarize(rows(1))["s|m|30"]["accuracy_ci"]
+    four = summarize(rows(4))["s|m|30"]["accuracy_ci"]
+    assert one == four
+    a = rows(4)
+    b = [{**r, "outcome": "correct"} for r in a]
+    assert paired_delta(b, a)[1:3] == paired_delta(b[::4], a[::4])[1:3]
+
+
+def test_echoing_the_question_is_not_an_answer():
+    """Two words shared with the card were enough, even when both came from the user's own
+    question: "I'll dig up the Globex offer letter" graded as answering from the card."""
+    from evals.harness.grade import answer_matches
+
+    card = "Done: Globex offer letter reviewed; base $182k, start date Jan 6. Review the Globex offer letter"
+    question = "what did the globex offer letter say again?"
+    assert not answer_matches(card, "I'll dig up the Globex offer letter for you.", said=question)
+    assert answer_matches(card, "Base was $182k, starting Jan 6.", said=question)

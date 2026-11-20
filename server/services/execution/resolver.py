@@ -9,6 +9,7 @@ module settles what it can and says honestly when something is ambiguous.
 Rules, first match wins:
 1. explicit  — ``#id`` (not "invoice #402"), a thread/draft id, or an exact agent name.
 2. event     — an email notification's thread id, else an open item waiting on its sender.
+               Events use only this rule: their text is untrusted email content.
 3. reference — short replies ("send it", "did she reply?", "cancel that") matched
                against open items surfaced in the last few transcript entries.
 4. entity    — a person named in the message, matched to that person's open items,
@@ -420,9 +421,11 @@ def resolve(
 ) -> Resolution:
     try:
         if event is not None:
-            res = _event(reg, event)
-            if res.kind != "unresolved":
-                return res
+            # Only the event's structured metadata (thread id, sender address) counts. The
+            # notification text is untrusted email content: running the text rules on it
+            # would let any sender steer the trusted <routing_hint> by writing "#12", an
+            # agent's name or a contact's name.
+            return _event(reg, event)
         message = (text or "").strip()
         if not message:
             return UNRESOLVED

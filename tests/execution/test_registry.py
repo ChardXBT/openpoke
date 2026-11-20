@@ -174,3 +174,20 @@ def test_bulk_insert_and_fts_sync(reg):
     with reg.connection() as conn:
         hits = conn.execute("SELECT rowid FROM agents_fts WHERE agents_fts MATCH 'bob'").fetchall()
     assert [h[0] for h in hits] == [7]
+
+
+def test_oversized_hash_id_is_just_not_found(tmp_path):
+    """"#99999999999999999999" overflowed SQLite's INTEGER and raised; one such line in the
+    transcript made the resolver give up for the whole turn."""
+    from server.services.execution.resolver import surfaced_agents
+    from server.services.execution.search import search_agents
+
+    reg = AgentRegistry(tmp_path / "agents.db")
+    rec, _ = reg.get_or_create("Email to Alice")
+    huge = "#" + "9" * 20
+    assert reg.find(huge) is None
+    assert reg.find(f"{huge} Email to Alice").id == rec.id  # unknown id: falls back to the name
+    assert reg.get_many([10**20, rec.id])[0].id == rec.id
+    assert search_agents(reg, huge) == []
+    transcript = (f"<agent_message>[SUCCESS] {huge} x: y\n[SUCCESS] Email to Alice: draft ready</agent_message>")
+    assert surfaced_agents(reg, transcript) == [rec.id]

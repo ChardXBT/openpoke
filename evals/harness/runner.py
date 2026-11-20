@@ -139,7 +139,8 @@ async def run_turn(setup: Setup, world: World, scenario: Scenario, client, rep: 
                 status = result.get("status")
                 statuses.append(status)
                 resolved = result.get("resolved_id")
-                if resolved is None and status == "submitted" and not result.get("new_agent_created"):
+                # A setup that sets resolved_id (even to None: created this turn) has decided.
+                if "resolved_id" not in result and status == "submitted" and not result.get("new_agent_created"):
                     resolved = parse_agent_id(str(result.get("agent", "")))
                 calls.append({"args": args, "status": status, "resolved_id": resolved,
                               "new_agent_created": result.get("new_agent_created")})
@@ -153,7 +154,8 @@ async def run_turn(setup: Setup, world: World, scenario: Scenario, client, rep: 
     if decision.dispatches == 0 and scenario.gold.agent_id is not None and user_msgs:
         gold = next((a for a in world.agents if a.id == scenario.gold.agent_id), None)
         if gold is not None:
-            decision.answered = answer_matches(f"{gold.state_note} {gold.topic}", user_msgs[-1])
+            decision.answered = answer_matches(f"{gold.state_note} {gold.topic}", user_msgs[-1],
+                                               said=scenario.message or "")
     outcome = grade(decision, scenario)
     return {
         **base, "outcome": outcome, "decision": asdict(decision), "guard_statuses": statuses,

@@ -19,6 +19,7 @@ from evals.harness.grade import paired_delta, summarize
 COLORS = {
     "ours": "#2a78d6",
     "b2_common": "#eb6834",
+    "b2_common-lexical": "#eb6834",
     "b1_cards": "#1baf7a",
     "b0_names": "#eda100",
     "ours-no_contract": "#e87ba4",
@@ -28,6 +29,7 @@ COLORS = {
 LABELS = {
     "ours": "Ours (reference-first)",
     "b2_common": "Common fork answer",
+    "b2_common-lexical": "Common fork answer (lexical only)",
     "b1_cards": "Full list + descriptions",
     "b0_names": "OpenPoke today",
     "ours-no_contract": "Ours without ask-guard",
@@ -96,7 +98,7 @@ def _paired_section(rows: list[dict], model: str) -> list[str]:
         ours = by.get(("ours", size))
         if not ours:
             continue
-        for base in ("b2_common", "b1_cards", "b0_names"):
+        for base in ("b2_common", "b2_common-lexical", "b1_cards", "b0_names"):
             if (base, size) in by:
                 d, lo, hi, n = paired_delta(ours, by[(base, size)])
                 if n:

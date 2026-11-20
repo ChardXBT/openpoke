@@ -170,3 +170,39 @@ def test_needs_user_choice_never_relents(routing):
         current_turn.reset(token)
     assert [r.payload["status"] for r in results] == ["needs_user_choice"] * 3
     assert "Stop retrying" in results[-1].payload["message"]
+
+
+# --- independent review ------------------------------------------------------------------
+def _call_msg(env, resolution, message, *args, **kwargs):
+    from server.agents.interaction_agent.turn_context import TurnContext, current_turn
+
+    token = current_turn.set(TurnContext(resolution=resolution, message=message))
+    try:
+        return env.tools_mod.send_message_to_agent(*args, **kwargs)
+    finally:
+        current_turn.reset(token)
+
+
+def test_ambiguous_send_blocked_even_when_instructions_avoid_send_words(routing):
+    """The user said "send it" (ambiguous); the model words the instruction as "proceed"."""
+    for wording in ("The user approved. Proceed with the draft.", "User confirmed - go ahead with it."):
+        result = _call_msg(routing, AMBIGUOUS, "yes send it", "#1", wording)
+        assert result.payload["status"] == "needs_user_choice", wording
+    assert routing.dispatched == []
+
+
+def test_multi_task_message_still_starts_new_work(routing):
+    """The user's irreversible words do not block unrelated new work in the same turn."""
+    result = _call_msg(routing, AMBIGUOUS, "send it, and also find flights to Tokyo",
+                       "Flight search – Tokyo", "Find flights to Tokyo next week.")
+    assert result.payload["status"] == "submitted"
+
+
+def test_create_new_string_false_is_not_true(routing):
+    """Models sometimes emit booleans as strings; "false" must not skip the duplicate guard."""
+    result = routing.tools_mod.handle_tool_call("send_message_to_agent", {
+        "agent_name": "Email to Alice Q3 deck v3",
+        "instructions": "Update the deck email for alice.chen@acme.com",
+        "create_new": "false",
+    })
+    assert result.payload["status"] == "possible_duplicate"

@@ -11,7 +11,10 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from .runtime import ExecutionAgentRuntime, ExecutionResult
+from ...config import get_settings
 from ...logging_config import logger
+from ...services.execution import loops
+from ...services.execution.registry import get_agent_registry
 
 
 _agent_locks: dict[
@@ -32,6 +35,15 @@ def _get_agent_lock(agent_name: str) -> asyncio.Lock:
             lock = asyncio.Lock()
             locks_by_loop[loop] = lock
         return lock
+
+
+def _abandon_if_running(agent_name: str) -> None:
+    """After a timeout or a run that never started, the agent must not stay "working now"."""
+    try:
+        if get_settings().router_mode == "reference":
+            loops.abandon_run(get_agent_registry(), agent_name)
+    except Exception as exc:  # pragma: no cover - bookkeeping never fails the run
+        logger.warning(f"[{agent_name}] could not clear running state: {exc}")
 
 
 @dataclass
@@ -111,6 +123,9 @@ class ExecutionBatchManager:
                     )
         finally:
             self._pending.pop(request_id, None)
+
+        if not result.success:
+            _abandon_if_running(agent_name)
 
         await self._complete_execution(batch_id, result, agent_name)
         return result

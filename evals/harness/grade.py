@@ -25,9 +25,13 @@ _COMMON = frozenset(
 )
 
 
-def answer_matches(reference: str, reply: str) -> bool:
-    """True when ``reply`` repeats the reference's distinctive facts (≥2 words, or a number)."""
-    ref = {t for t in _FACT.findall((reference or "").casefold()) if t not in _COMMON}
+def answer_matches(reference: str, reply: str, said: str = "") -> bool:
+    """True when ``reply`` repeats the reference's distinctive facts (≥2 words, or a number).
+
+    Words the user already ``said`` do not count: echoing the question is not an answer.
+    """
+    echoed = set(_FACT.findall((said or "").casefold()))
+    ref = {t for t in _FACT.findall((reference or "").casefold()) if t not in _COMMON and t not in echoed}
     got = set(_FACT.findall((reply or "").casefold()))
     shared = ref & got
     return any(any(ch.isdigit() for ch in t) for t in shared) or len(shared) >= 2
@@ -73,6 +77,11 @@ def grade(decision: Decision, scenario: Scenario) -> str:
     gold = scenario.gold
     ok_agents = {gold.agent_id, *gold.acceptable} - {None}
     if gold.kind == "ASK":
+        # On a scenario whose next step cannot be undone, sending work to any existing agent
+        # before the user chooses is acting on a guess. Judged by the gold label, not by the
+        # system-under-test's own irreversibility regex (which "nudge"/"bump" slip past).
+        if scenario.irreversible and any(t != "NEW" for t in decision.targets):
+            return "missed_ask"
         if decision.kind == "ASK" or (decision.asked and not decision.irreversible_dispatch):
             return "correct"
         if decision.kind in ("agent", "NEW"):
@@ -106,6 +115,14 @@ def _bootstrap(values: list[float], n: int = 1000, seed: int = 7) -> tuple[float
     return (means[int(0.025 * n)], means[int(0.975 * n) - 1])
 
 
+def _per_scenario(rows: list[dict], value: Callable[[dict], float]) -> list[float]:
+    """One value per scenario (mean over its reps): reps of one scenario are not independent."""
+    by: dict[str, list[float]] = {}
+    for r in rows:
+        by.setdefault(str(r["scenario_id"]), []).append(value(r))
+    return [statistics.fmean(v) for v in by.values()]
+
+
 def summarize(rows: Iterable[dict]) -> dict:
     """Group by (setup, model, size) → rates with 95% bootstrap intervals."""
     groups: dict[tuple, list[dict]] = {}
@@ -125,7 +142,7 @@ def summarize(rows: Iterable[dict]) -> dict:
             "does_not_fit": sum(1 for r in items if r["outcome"] == "does_not_fit"),
             "errors": sum(1 for r in items if r["outcome"] == "error"),
             "accuracy": statistics.fmean(correct) if correct else float("nan"),
-            "accuracy_ci": _bootstrap(correct),
+            "accuracy_ci": _bootstrap(_per_scenario(scored, lambda r: 1.0 if r["outcome"] == "correct" else 0.0)),
             "duplicate_rate": _rate(reuse_rows, "duplicate"),
             "wrong_reuse_rate": _rate(reuse_rows + new_rows, "wrong_reuse"),
             "false_reuse_rate": _rate(new_rows, "wrong_reuse"),
@@ -159,13 +176,18 @@ def paired_delta(rows_a: list[dict], rows_b: list[dict], n: int = 1000, seed: in
         return (r["scenario_id"], r["size"], r.get("rep", 0), r["model"])
 
     b_by_key = {key(r): r for r in rows_b if r["outcome"] in OUTCOMES}
-    diffs = [
-        (1.0 if a["outcome"] == "correct" else 0.0) - (1.0 if b_by_key[key(a)]["outcome"] == "correct" else 0.0)
-        for a in rows_a if a["outcome"] in OUTCOMES and key(a) in b_by_key
-    ]
+    diffs: list[float] = []
+    clusters: dict[tuple, list[float]] = {}  # per scenario: reps of one scenario are correlated
+    for a in rows_a:
+        if a["outcome"] not in OUTCOMES or key(a) not in b_by_key:
+            continue
+        d = (1.0 if a["outcome"] == "correct" else 0.0) - (1.0 if b_by_key[key(a)]["outcome"] == "correct" else 0.0)
+        diffs.append(d)
+        clusters.setdefault((a["scenario_id"], a["size"], a["model"]), []).append(d)
     if not diffs:
         return (float("nan"), float("nan"), float("nan"), 0)
-    lo, hi = _bootstrap(diffs, n, seed)
+    # Resample scenarios (cluster bootstrap), not rows.
+    lo, hi = _bootstrap([statistics.fmean(v) for v in clusters.values()], n, seed)
     return (statistics.fmean(diffs), lo, hi, len(diffs))
 
 

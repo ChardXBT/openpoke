@@ -83,3 +83,45 @@ def test_registry_failure_never_fails_the_agent(env):
     rt = runtime_mod.ExecutionAgentRuntime("Email to Alice")
     result = asyncio.run(rt.execute("anything"))
     assert result.success
+
+
+def test_timed_out_run_is_not_left_running_forever(env):
+    """The batch manager cancels a run on timeout; the agent must not stay "working now"
+    (an open state that is never archived) after it."""
+    reg, runtime_mod, settings, monkeypatch = env
+    monkeypatch.setattr(runtime_mod, "get_settings", lambda: settings("reference"))
+
+    async def hang(**_kwargs):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(runtime_mod, "request_chat_completion", hang)
+    monkeypatch.setattr(runtime_mod.loops, "_default_trigger_lookup", lambda name: False)
+
+    async def main():
+        rt = runtime_mod.ExecutionAgentRuntime("Flight search")
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(rt.execute("find flights"), timeout=0.05)
+
+    asyncio.run(main())
+    assert reg.find("Flight search").state == "failed"
+
+
+def test_batch_manager_marks_unstartable_run_failed(env):
+    """The IA marks the target "working now" before dispatch; if the runtime cannot even be
+    built, the agent must not stay "working now"."""
+    reg, runtime_mod, settings, monkeypatch = env
+    import server.agents.execution_agent.batch_manager as bm
+
+    rec, _ = reg.get_or_create("Flight search")
+    reg.touch(rec.id, state="running")
+
+    def broken(*_a, **_k):
+        raise ValueError("OpenRouter API key not configured")
+
+    monkeypatch.setattr(bm, "ExecutionAgentRuntime", broken)
+    monkeypatch.setattr(bm, "get_settings", lambda: settings("reference"), raising=False)
+    manager = bm.ExecutionBatchManager()
+    monkeypatch.setattr(manager, "_dispatch_to_interaction_agent", lambda *a, **k: asyncio.sleep(0), raising=False)
+    result = asyncio.run(manager.execute_agent("Flight search", "find flights"))
+    assert not result.success
+    assert reg.get(rec.id).state == "failed"

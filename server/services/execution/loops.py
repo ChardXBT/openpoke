@@ -13,6 +13,7 @@ every turn.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Optional
@@ -67,9 +68,25 @@ def _first_ref(reg: AgentRegistry, agent_id: int, kind: str) -> str:
 
 
 # ---------------------------------------------------------------- run lifecycle
+def _paused_key(agent_id: int) -> str:
+    return f"paused_draft:{agent_id}"
+
+
+def mark_running(reg: AgentRegistry, agent_id: int, count_request: bool = False) -> None:
+    """Mark an agent "working now", remembering a draft that is still awaiting the user's OK.
+
+    A follow-up run that neither sends nor deletes the draft ("what does it say?") leaves the
+    draft pending; ``finish_run`` puts the agent back to ``waiting_on_user`` instead of ``done``.
+    """
+    record = reg.get(agent_id)
+    if record is not None and record.state == "waiting_on_user":
+        reg.set_meta(_paused_key(agent_id), json.dumps({"note": record.state_note}))
+    reg.touch(agent_id, state="running", count_request=count_request)
+
+
 def begin_run(reg: AgentRegistry, name: str, instructions: str) -> int:
     record, _ = reg.get_or_create(name, topic=_clean(instructions, 160))
-    reg.touch(record.id, state="running", count_request=True)
+    mark_running(reg, record.id, count_request=True)
     return record.id
 
 
@@ -164,17 +181,33 @@ def finish_run(
     record = reg.get(agent_id)
     if record is None:
         return
+    paused = reg.get_meta(_paused_key(agent_id))
+    reg.set_meta(_paused_key(agent_id), None)
     active = bool(has_active_trigger(record.name))
     reg.set_trigger_flag(agent_id, active)
     if record.state == "running":
         if not success:
             reg.set_state(agent_id, "failed", "last run failed")
+        elif paused is not None:  # nothing sent or deleted: the draft still awaits the user's OK
+            try:
+                note = str(json.loads(paused).get("note") or "")
+            except (ValueError, AttributeError):
+                note = ""
+            reg.set_state(agent_id, "waiting_on_user", note or "draft awaiting your OK")
         elif active:
             reg.set_state(agent_id, "scheduled", record.state_note or "reminder scheduled")
         else:
             reg.set_state(agent_id, "done")
     elif record.state == "scheduled" and not active:
         reg.set_state(agent_id, "done")
+
+
+def abandon_run(reg: AgentRegistry, name: str) -> None:
+    """A run that timed out or never started must not stay "working now" forever."""
+    record = reg.find(name)
+    if record is not None and record.state == "running":
+        reg.set_meta(_paused_key(record.id), None)
+        reg.set_state(record.id, "failed", "last run failed")
 
 
 # ---------------------------------------------------------------- housekeeping
@@ -213,5 +246,5 @@ def age_label(last_active_at: str, now: datetime) -> str:
 
 
 __all__: Iterable[str] = (
-    "begin_run", "observe_tool_call", "finish_run", "sweep", "age_label", "SEND_TOOLS",
+    "begin_run", "mark_running", "abandon_run", "observe_tool_call", "finish_run", "sweep", "age_label", "SEND_TOOLS",
 )
