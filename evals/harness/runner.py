@@ -45,6 +45,19 @@ class MultiBudget(Budget):
             b.charge(usd)
 
 
+HELDOUT_HASH_FILE = Path(__file__).resolve().parents[1] / "results" / "heldout.sha256"
+
+
+def heldout_hash_ok(scenarios: list[Scenario]) -> bool:
+    """The held-out set was frozen by hash before any held-out run; check it is unchanged."""
+    import hashlib
+
+    if not HELDOUT_HASH_FILE.exists():
+        return False
+    blob = json.dumps([asdict(s) for s in scenarios], sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest() == HELDOUT_HASH_FILE.read_text(encoding="utf-8").split()[0]
+
+
 def make_setup(name: str) -> Setup:
     from evals.setups.b0_names import B0Names
     from evals.setups.b1_cards import B1Cards
@@ -202,7 +215,10 @@ async def run(
     started = time.time()
     for size in sizes:
         world = world_factory(size, seed)
-        scenarios = [s for s in scenario_factory(world) if not families or s.family in families]
+        all_scenarios = scenario_factory(world)
+        if split == "heldout" and not heldout_hash_ok(all_scenarios):
+            raise SystemExit("held-out scenarios do not match evals/results/heldout.sha256; refusing to run")
+        scenarios = [s for s in all_scenarios if not families or s.family in families]
         if limit:
             scenarios = scenarios[:limit]
         log(f"size {size}: {len(scenarios)} scenarios x {len(setups)} setups x {reps} reps")
