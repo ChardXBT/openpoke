@@ -40,11 +40,21 @@ def _env_int(name: str, fallback: int) -> int:
 
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
+DEFAULT_OPENAI_MODEL = "gpt-6.1-terra"
 ROUTER_MODES = ("reference", "legacy")
+PROVIDERS = ("openrouter", "openai")
+
+
+def _env_provider() -> str:
+    provider = (os.getenv("OPENPOKE_PROVIDER") or "openrouter").strip().lower()
+    return provider if provider in PROVIDERS else "openrouter"
 
 
 def _env_model() -> str:
-    return (os.getenv("OPENPOKE_MODEL") or DEFAULT_MODEL).strip()
+    explicit = (os.getenv("OPENPOKE_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    return DEFAULT_OPENAI_MODEL if _env_provider() == "openai" else DEFAULT_MODEL
 
 
 def _env_router_mode() -> str:
@@ -81,6 +91,9 @@ class Settings(BaseModel):
 
     # Credentials / integrations
     openrouter_api_key: Optional[str] = Field(default=os.getenv("OPENROUTER_API_KEY"))
+    # LLM provider: "openrouter" (default) or "openai" (OpenAI API directly with OPENAI_API_KEY).
+    llm_provider: str = Field(default_factory=lambda: _env_provider())
+    openai_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
 
@@ -104,6 +117,11 @@ class Settings(BaseModel):
     def resolved_docs_url(self) -> Optional[str]:
         """Return documentation URL when docs are enabled."""
         return (self.docs_url or "/docs") if self.enable_docs else None
+
+    @property
+    def llm_api_key(self) -> Optional[str]:
+        """API key for the active provider."""
+        return self.openai_api_key if self.llm_provider == "openai" else self.openrouter_api_key
 
     @property
     def summarization_enabled(self) -> bool:

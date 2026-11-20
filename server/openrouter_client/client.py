@@ -8,6 +8,7 @@ import httpx
 from ..config import get_settings
 
 OpenRouterBaseURL = "https://openrouter.ai/api/v1"
+OpenAIChatURL = "https://api.openai.com/v1/chat/completions"
 
 
 class OpenRouterError(RuntimeError):
@@ -16,7 +17,7 @@ class OpenRouterError(RuntimeError):
 
 def _headers(*, api_key: Optional[str] = None) -> Dict[str, str]:
     settings = get_settings()
-    key = (api_key or settings.openrouter_api_key or "").strip()
+    key = (api_key or settings.llm_api_key or "").strip()
     if not key:
         raise OpenRouterError("Missing OpenRouter API key")
 
@@ -58,6 +59,7 @@ async def request_chat_completion(
 ) -> Dict[str, Any]:
     """Request a chat completion and return the raw JSON payload."""
 
+    settings = get_settings()
     payload: Dict[str, object] = {
         "model": model,
         "messages": _build_messages(messages, system),
@@ -68,6 +70,13 @@ async def request_chat_completion(
         payload["tools"] = tools
 
     url = f"{base_url.rstrip('/')}/chat/completions"
+    if settings.llm_provider == "openai":
+        # OpenAI directly: its own model ids, max_completion_tokens, and no reasoning (chat
+        # completions refuses function tools combined with reasoning on newer models).
+        url = OpenAIChatURL
+        payload["model"] = model.split("/", 1)[1] if model.startswith("openai/") else model
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
+        payload["reasoning_effort"] = "none"
 
     async with httpx.AsyncClient() as client:
         try:

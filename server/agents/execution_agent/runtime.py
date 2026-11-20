@@ -33,7 +33,7 @@ class ExecutionAgentRuntime:
     def __init__(self, agent_name: str):
         settings = get_settings()
         self.agent = ExecutionAgent(agent_name)
-        self.api_key = settings.openrouter_api_key
+        self.api_key = settings.llm_api_key
         self.model = settings.execution_agent_model
         self.tool_registry = get_tool_registry(agent_name=agent_name)
         self.tool_schemas = get_tool_schemas()

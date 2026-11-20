@@ -51,7 +51,7 @@ class InteractionAgentRuntime:
     # Initialize interaction agent runtime with settings and service dependencies
     def __init__(self) -> None:
         settings = get_settings()
-        self.api_key = settings.openrouter_api_key
+        self.api_key = settings.llm_api_key
         self.model = settings.interaction_agent_model
         self.settings = settings
         self.conversation_log = get_conversation_log()
