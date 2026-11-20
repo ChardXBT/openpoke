@@ -20,6 +20,7 @@ checkout's chat, agents, profile and mailbox, so don't run this against your own
 ```bash
 rm -rf server/data
 python -m server.server            # wait ~5 s: the watcher's first poll marks old mail as read
+python -m evals.seed_demo --agents 5000   # months of finished history; free, no model calls
 npm run dev --prefix web           # open http://localhost:3000 in a wide window (the panel needs ≥1024 px)
 ```
 
@@ -76,6 +77,17 @@ and suggests 12:30 at Pai on Duncan". No new agent appears, and the lunch item l
 items*: a reply on the thread it was waiting on closes the loop. *Say: the notification carries
 the thread id, so routing uses Gmail's metadata, not the email's text. A sender can't steer it by
 writing an agent's name.*
+
+## 4b. It still finds old things among thousands (30 s)
+
+> where did we book dim sum in the annex back in september?
+
+> how much was my property tax bill?
+
+Poke finds the September booking and the $64.20 bill with `search_agents`, among 5,000 past
+agents it never puts in the prompt. *Say: the panel says "2 of 5,000 agents". OpenPoke today puts
+all 5,000 names in every prompt, about 30k tokens of names alone. Mine shows the open items and
+searches for the rest.*
 
 ## 5. You stay in control (30 s)
 
