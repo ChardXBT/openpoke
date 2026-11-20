@@ -31,6 +31,7 @@ CASEFOLD_REF_KINDS = {"contact", "contact_name", "subject", "alias"}
 _NON_ALNUM = re.compile(r"[^0-9a-z]+")
 _HASH_ID = re.compile(r"^#(\d+)$")
 _HASH_PREFIX = re.compile(r"^#(\d+)\b")
+_MIN_ID, _MAX_ID = 0, 2**63 - 1  # SQLite INTEGER range (ids are positive)
 
 
 def utc_now() -> datetime:
@@ -235,12 +236,14 @@ class AgentRegistry:
             return _row_to_record(row), True
 
     def get(self, agent_id: int) -> Optional[AgentRecord]:
+        if not _MIN_ID <= int(agent_id) <= _MAX_ID:  # "#999…9" would overflow SQLite INTEGER
+            return None
         with self.connection() as conn:
             row = conn.execute(f"SELECT {_COLUMNS} FROM agents WHERE id = ?", (agent_id,)).fetchone()
         return _row_to_record(row) if row else None
 
     def get_many(self, agent_ids: Iterable[int]) -> list[AgentRecord]:
-        ids = list(dict.fromkeys(int(i) for i in agent_ids))
+        ids = [i for i in dict.fromkeys(int(i) for i in agent_ids) if _MIN_ID <= i <= _MAX_ID]
         if not ids:
             return []
         placeholders = ",".join("?" for _ in ids)
