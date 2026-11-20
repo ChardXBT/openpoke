@@ -338,3 +338,38 @@ def test_echoing_the_question_is_not_an_answer():
     question = "what did the globex offer letter say again?"
     assert not answer_matches(card, "I'll dig up the Globex offer letter for you.", said=question)
     assert answer_matches(card, "Base was $182k, starting Jan 6.", said=question)
+
+
+def test_heldout2_freeze_and_run_once(tmp_path, monkeypatch):
+    from evals.harness import runner
+    from evals.world.generate import build_world
+    from evals.world.scenarios import build_scenarios
+
+    scenarios = build_scenarios(build_world(30, 3))
+    freeze, runs = tmp_path / "heldout2.sha256", tmp_path / "runs.jsonl"
+    monkeypatch.setattr(runner, "HELDOUT2_FREEZE", freeze)
+    monkeypatch.setattr(runner, "HELDOUT2_RUNS", runs)
+    assert "not frozen" in runner.heldout2_check(scenarios, "m", ["ours"], [30])
+    freeze.write_text(f"{runner.scenario_digest(scenarios)}  s\n{runner.code_digest()}  c\n", encoding="utf-8")
+    assert runner.heldout2_check(scenarios, "m", ["ours"], [30]) is None
+    assert "scenarios changed" in runner.heldout2_check(scenarios[:-1], "m", ["ours"], [30])
+    runs.write_text('{"model": "m", "setups": ["ours"], "sizes": [30]}\n', encoding="utf-8")
+    assert "runs once" in runner.heldout2_check(scenarios, "m", ["ours", "b2_common"], [30, 1000])
+    assert runner.heldout2_check(scenarios, "m", ["b2_common"], [30]) is None  # another cell
+    assert runner.heldout2_check(scenarios, "other-model", ["ours"], [30]) is None
+    freeze.write_text(f"{runner.scenario_digest(scenarios)}  s\n{'0' * 64}  c\n", encoding="utf-8")
+    assert "code changed" in runner.heldout2_check(scenarios, "m", ["b2_common"], [30])
+
+
+def test_code_digest_ignores_line_endings_and_reporting(tmp_path):
+    from evals.harness import runner
+
+    for rel in ("server/services/execution/a.py", "evals/harness/report.py", "evals/schema.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(b"x = 1\n")
+    before = runner.code_digest(tmp_path)
+    (tmp_path / "server/services/execution/a.py").write_bytes(b"x = 1\r\n")
+    (tmp_path / "evals/harness/report.py").write_bytes(b"changed\n")
+    assert runner.code_digest(tmp_path) == before
+    (tmp_path / "evals/schema.py").write_bytes(b"x = 2\n")
+    assert runner.code_digest(tmp_path) != before

@@ -65,6 +65,16 @@ def heldout(heldout_world):
     return build_scenarios(heldout_world)
 
 
+@pytest.fixture(scope="module")
+def heldout2_world():
+    return build_world(1000, 3)
+
+
+@pytest.fixture(scope="module")
+def heldout2(heldout2_world):
+    return build_scenarios(heldout2_world)
+
+
 def test_deterministic():
     assert build_world(500, 1) == build_world(500, 1)
     assert build_scenarios(build_world(CORE_AGENT_COUNT, 2)) == build_scenarios(build_world(CORE_AGENT_COUNT, 2))
@@ -201,13 +211,23 @@ def test_family_counts(dev, heldout):
         assert all(re.fullmatch(rf"{split}-\d\d-\d\d\d", scenario_id) for scenario_id in ids)
 
 
-def test_splits_disjoint(dev, heldout):
+def test_splits_disjoint(dev, heldout, heldout2):
     assert not _scenario_texts(dev) & _scenario_texts(heldout)
+    assert not _scenario_texts(heldout2) & (_scenario_texts(dev) | _scenario_texts(heldout))
+
+
+def test_heldout2_is_a_full_split(heldout2, heldout2_world):
+    by_id = {agent.id: agent for agent in heldout2_world.agents}
+    assert len(heldout2) == 31 and {s.family for s in heldout2} == set(range(1, 11))
+    assert all(s.split == "heldout2" for s in heldout2)
+    for s in heldout2:
+        if s.gold.kind == "agent":
+            assert s.gold.agent_id in by_id, s.id
 
 
 def test_unknown_seed_has_no_split():
     with pytest.raises(ValueError):
-        build_scenarios(build_world(CORE_AGENT_COUNT, 3))
+        build_scenarios(build_world(CORE_AGENT_COUNT, 4))
 
 
 def test_family_semantics(dev, heldout, dev_world):
@@ -241,8 +261,8 @@ def test_family_semantics(dev, heldout, dev_world):
             assert any(turn.role == "poke" and "?" in turn.text for turn in scenario.history)
 
 
-def test_history_consistent_with_world(dev, heldout, dev_world, heldout_world):
-    for world, scenarios in ((dev_world, dev), (heldout_world, heldout)):
+def test_history_consistent_with_world(dev, heldout, dev_world, heldout_world, heldout2, heldout2_world):
+    for world, scenarios in ((dev_world, dev), (heldout_world, heldout), (heldout2_world, heldout2)):
         by_id = {agent.id: agent for agent in world.agents}
         now = _parse(world.now)
         for scenario in scenarios:

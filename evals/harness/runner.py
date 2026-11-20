@@ -22,7 +22,7 @@ from evals.harness.llm import Budget, BudgetExceeded, LLMClient, budget_for
 from evals.schema import Scenario, Setup, World
 from evals.setups.common import parse_agent_id
 
-SPLIT_SEEDS = {"dev": 1, "heldout": 2}
+SPLIT_SEEDS = {"dev": 1, "heldout": 2, "heldout2": 3}
 GUARD_STATUSES = {"needs_user_choice", "confirm_target", "owned_by", "possible_duplicate", "error"}
 MAX_ITERATIONS = 4
 
@@ -56,6 +56,61 @@ def heldout_hash_ok(scenarios: list[Scenario]) -> bool:
         return False
     blob = json.dumps([asdict(s) for s in scenarios], sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest() == HELDOUT_HASH_FILE.read_text(encoding="utf-8").split()[0]
+
+
+ROOT = Path(__file__).resolve().parents[2]
+HELDOUT2_FREEZE = ROOT / "evals" / "results" / "heldout2.sha256"
+HELDOUT2_RUNS = ROOT / "evals" / "results" / "heldout2.runs.jsonl"
+# Everything that decides a routing outcome: product routing code, the setups, the harness and
+# the world. A held-out split frozen with this digest can't be run on code changed after it.
+FROZEN_CODE = ("server/services/execution", "server/agents/interaction_agent", "server/services/profile",
+               "evals/setups", "evals/harness", "evals/world", "evals/schema.py")
+NOT_FROZEN = {"evals/harness/report.py", "evals/harness/prompt_sizes.py"}  # reporting only
+
+
+def code_digest(root: Path = ROOT) -> str:
+    import hashlib
+
+    files: list[Path] = []
+    for rel in FROZEN_CODE:
+        path = root / rel
+        files += [path] if path.is_file() else sorted(path.rglob("*"))
+    digest = hashlib.sha256()
+    for path in sorted(f for f in files if f.is_file() and f.suffix in {".py", ".md"}):
+        rel = path.relative_to(root).as_posix()
+        if rel in NOT_FROZEN or "__pycache__" in rel:
+            continue
+        digest.update(rel.encode() + b"\0" + path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return digest.hexdigest()
+
+
+def scenario_digest(scenarios: list[Scenario]) -> str:
+    import hashlib
+
+    blob = json.dumps([asdict(s) for s in scenarios], sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def heldout2_check(scenarios: list[Scenario], model: str, setups: list[str], sizes: list[int]) -> Optional[str]:
+    """Why heldout2 must not run now (None: it may). Frozen scenarios + code, and each
+    (model, setup, size) cell runs once."""
+    if not HELDOUT2_FREEZE.exists():
+        return "heldout2 is not frozen yet (evals/results/heldout2.sha256)"
+    frozen = [line.split()[0] for line in HELDOUT2_FREEZE.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if scenario_digest(scenarios) != frozen[0]:
+        return "heldout2 scenarios changed since the freeze"
+    if code_digest() != frozen[1]:
+        return "routing code changed since heldout2 was frozen; it can't be run on tuned code"
+    done = set()
+    if HELDOUT2_RUNS.exists():
+        for line in HELDOUT2_RUNS.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                r = json.loads(line)
+                done |= {(r["model"], st, sz) for st in r["setups"] for sz in r["sizes"]}
+    repeats = sorted(c for c in done if c[0] == model and c[1] in setups and c[2] in sizes)
+    if repeats:
+        return f"heldout2 already ran {repeats}; it runs once"
+    return None
 
 
 def make_setup(name: str) -> Setup:
@@ -216,6 +271,16 @@ async def run(
                     fh.write(json.dumps(row, default=str) + "\n")
 
     started = time.time()
+    if split == "heldout2":
+        first = scenario_factory(world_factory(sizes[0], seed))
+        reason = heldout2_check(first, client.model, [s.name for s in setups], sizes)
+        if reason:
+            raise SystemExit(f"refusing to run: {reason}")
+        HELDOUT2_RUNS.parent.mkdir(parents=True, exist_ok=True)
+        with HELDOUT2_RUNS.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"model": client.model, "setups": [s.name for s in setups], "sizes": sizes,
+                                 "out": out.as_posix(), "code": code_digest()[:12],
+                                 "started": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
     for size in sizes:
         world = world_factory(size, seed)
         all_scenarios = scenario_factory(world)

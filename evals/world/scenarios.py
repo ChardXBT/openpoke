@@ -1,6 +1,7 @@
 """Routing scenarios (spec section 7) built on a world's core agents.
 
-Seed 1 gives the "dev" split and seed 2 the "heldout" split. Each split has its own
+Seed 1 gives the "dev" split and seed 2 the "heldout" split; seed 3 is "heldout2", written
+after all tuning and frozen with a digest of the routing code before its only run. Each split has its own
 random stream and its own wording (asks, relays, chatter, messages), so the two share
 no scenario text. Scenarios read only core agents, so they are identical at every
 world size for a seed.
@@ -24,7 +25,7 @@ from evals.world.generate import (
     CORE_AGENT_COUNT, CORE_IDS, CORE_SPEC_BY_ID, CORE_SPECS, contact, iso, parse_iso,
 )
 
-SPLIT_BY_SEED = {1: "dev", 2: "heldout"}
+SPLIT_BY_SEED = {1: "dev", 2: "heldout", 3: "heldout2"}
 
 # Human labels poke uses for core matters (world-level, shared by both splits).
 _SHORT = {
@@ -160,7 +161,59 @@ _HELDOUT = _Wording(
     holds=("hold on", "ok so", "sorry, was driving"),
     defer=("leave it for now", "Sure, it stays unsent until you say so."),
 )
-_WORDING = {"dev": _DEV, "heldout": _HELDOUT}
+_HELDOUT2 = _Wording(
+    asks={
+        "alice_deck": "send alice chen the q3 deck for review, comments due fri",
+        "alice_lunch": "see if alice is around for lunch on thurs",
+        "acme_renewal": "get a reply to alice ready with the acme renewal markups",
+        "romero_brand": "send alice romero our notes on the brand guide",
+        "priya_sow": "draft priya the revised statement of work",
+        "marcus_onboarding": "email marcus bell to find a time for onboarding",
+        "omar_invoice": "follow up w omar about invoice 1042",
+        "jen_workshop": "draft jen ito the agenda for the dec 4 workshop",
+        "bob_reimburse": "ask bob to pay me back the $84 for concert tix",
+        "accountant_call": "remind me about the 2pm call with ken tomorrow",
+        "spin_class": "remind me every tuesday at 6 for spin",
+        "landlord_lease": "answer greg novak yes on the 12 month lease renewal",
+        "allison_intro": "draft an intro between allison wu and jordan blake for the design job",
+        "costco_receipt": "find my october costco receipt for the tv",
+        "weather_hike": "what's saturday looking like at rattlesnake point",
+    },
+    acks=("Getting started.", "Starting on that.", "Sure, working on it."),
+    result={
+        "waiting_on_user": "Draft {draft} for {full} ({email}) is ready, subject: {subject}. Waiting for your OK before sending.",
+        "waiting_on_others": "Sent to {full} on thread {thread} ({subject}); no reply so far.",
+        "scheduled": "Set trigger {trigger}: {detail}.",
+        "done": "All done: {detail}.",
+    },
+    status={
+        "waiting_on_user": "Draft {draft} to {full} is still waiting for you; not sent.",
+        "waiting_on_others": "No reply yet from {full} on thread {thread}.",
+        "scheduled": "Trigger {trigger} is still set: {detail}.",
+    },
+    relay={
+        "waiting_on_user": "Your email to {first} about {short} is ready. Want me to send it?",
+        "waiting_on_others": "Sent {first} the note about {short}. I'll let you know when they answer.",
+        "scheduled": "Done, {short} is set.",
+        "costco_receipt": "Found it: the TV was $899.99 on Oct 14.",
+        "weather_hike": "Saturday looks clear and cold, around 4°C.",
+    },
+    relay_status={
+        "waiting_on_user": "{first}'s email about {short} hasn't gone out yet.",
+        "waiting_on_others": "Still waiting on {first} about {short}.",
+        "scheduled": "{short} is still set.",
+    },
+    chatter=(
+        ("lmao", "😂"), ("what's 20% of 47", "$9.40."), ("how many days left in the month?", "Ten more after today."),
+        ("thx!", "You bet."), ("another word for tired", "Weary, drained, worn out."),
+        ("how many grams in an ounce", "About 28 grams."), ("what a day", "Hope the evening is calmer."),
+        ("convert 30C to F", "86°F."), ("affect or effect?", '"Affect" is usually the verb.'),
+        ("sweet", "🙌"), ("capital of new zealand?", "Wellington."), ("how do you spell accommodate", "A-C-C-O-M-M-O-D-A-T-E."),
+    ),
+    holds=("wait", "brb", "sorry, in a meeting"),
+    defer=("not yet, hold it", "No problem, I'll keep it unsent."),
+)
+_WORDING = {"dev": _DEV, "heldout": _HELDOUT, "heldout2": _HELDOUT2}
 
 
 # --------------------------------------------------------------------------- cases per split
@@ -334,6 +387,65 @@ _CASES: dict[str, dict[int, list[tuple]]] = {
              "spin", "move the reminder thing to 6:15", False),
         ],
     },
+    "heldout2": {
+        1: [
+            ("passport", "remind me what docs i need for the passport renewal"),
+            ("subs_audit", "which subscriptions did you say i was paying twice for"),
+            ("shopify_app", "any update from shopify on the pm role"),
+        ],
+        2: [
+            ("alice_deck", "acme_renewal", "alice says drop the appendix from the deck", False),
+            ("alice_lunch", "alice_deck", "did alice confirm lunch yet", False),
+            ("acme_renewal", "alice_lunch", "send alice the renewal markups", True),
+        ],
+        3: [
+            ("priya_sow", "ship it", True),
+            ("marcus_onboarding", "has he responded", False),
+            ("accountant_call", "make it 2:30 instead", False),
+            ("jen_workshop", "all good, send it", True),
+        ],
+        4: [
+            ("alice_deck", "priya_sow", "send it now"),
+            ("alice_lunch", "romero_brand", "follow up with her"),
+            ("accountant_call", "spin_class", "cancel that reminder"),
+        ],
+        5: [
+            ("named", "jen_workshop", "bob_reimburse", "bob_reimburse", "send the bob one", True),
+            ("named", "accountant_call", "spin_class", "accountant_call", "cancel the ken reminder", True),
+            ("stale", "landlord_lease", "acme_renewal", "yes send it"),
+        ],
+        6: [
+            ("dentist_vancouver", "book me a dentist cleaning in toronto next week", False),
+            ("sofa_return", "start a return for the chair i got from wayfair", False),
+            ("rent_reminder", "remind me monthly to pay the internet bill", False),
+        ],
+        7: [
+            ("marcus_onboarding", "priya_sow", "marcus wants to move onboarding to the 9th, tell him that works", True),
+            ("priya_sow", "marcus_onboarding", "change the sow payment terms to net 15", False),
+            ("omar_invoice", "jen_workshop", "has kestrel paid the invoice", False),
+        ],
+        8: [
+            ("alice_lunch", "Alice Chen says Thursday is good and asks if 1pm works."),
+            ("aircanada_refund", "Air Canada says the refund for AC8812 needs a receipt for the hotel night."),
+            ("omar_invoice", "Omar Haddad says invoice #1042 is scheduled for payment on Dec 1."),
+        ],
+        9: [
+            ("photographer", "what did the wedding photographer package cost", False),
+            ("bob_cabin", "what did bob owe me for the cabin trip again", False),
+            ("alicia_bday", "email alicia the name of the restaurant from her birthday, alicia.r@gmail.com", True),
+        ],
+        10: [
+            ("acme_renewal", "alice_deck", "the alice draft", "how's the alice draft looking",
+             "Alice has two drafts ready: the Q3 deck and the Acme renewal markups. Which one?",
+             "the renewal one", "ok send the alice draft", True),
+            ("omar_invoice", "marcus_onboarding", "that follow-up", "any news on that follow-up?",
+             "Which one: Marcus about onboarding, or Omar about invoice #1042?",
+             "the omar one", "nudge them on that follow-up", True),
+            ("spin_class", "accountant_call", "that reminder", "what time is that reminder",
+             "The Ken call tomorrow at 2, or Tuesday spin?",
+             "the spin class", "push that reminder to 6:30", False),
+        ],
+    },
 }
 
 
@@ -476,6 +588,11 @@ _COMBINED_RELAY = {
         "waiting_on_user": "Two drafts waiting on you: {a_first} ({a_short}) and {b_first} ({b_short}).",
         "waiting_on_others": "Both went out: {a_first} ({a_short}) and {b_first} ({b_short}). Watching for replies.",
         "scheduled": "Two reminders on: {a_short} and {b_short}.",
+    },
+    "heldout2": {
+        "waiting_on_user": "Both are drafted: {a_first} on {a_short}, {b_first} on {b_short}.",
+        "waiting_on_others": "Both are out: {a_first} on {a_short}, {b_first} on {b_short}. I'll flag the replies.",
+        "scheduled": "Both are set: {a_short} and {b_short}.",
     },
 }
 
@@ -660,7 +777,7 @@ def _check_core(world: World) -> None:
 def build_scenarios(world: World) -> list[Scenario]:
     """Scenarios for the world's split (seed 1 = dev, seed 2 = heldout), using core agents only."""
     if world.seed not in SPLIT_BY_SEED:
-        raise ValueError(f"no scenario split for seed {world.seed}; use 1 (dev) or 2 (heldout)")
+        raise ValueError(f"no scenario split for seed {world.seed}; use 1 (dev), 2 (heldout) or 3 (heldout2)")
     _check_core(world)
     ctx = _Ctx(world, SPLIT_BY_SEED[world.seed])
     scenarios: list[Scenario] = []
