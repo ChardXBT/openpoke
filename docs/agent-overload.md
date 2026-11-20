@@ -39,6 +39,7 @@ not with how long they have used the product.
 | Ambiguity contract | `server/agents/interaction_agent/tools.py` | `send_message_to_agent` refuses irreversible steps on ambiguous references (`needs_user_choice`), challenges a send aimed away from what the user meant (`confirm_target`), redirects work an agent already owns (`owned_by`), flags look-alike open work (`possible_duplicate`, overridable with `create_new`). |
 | Prompt | `server/agents/interaction_agent/routing_prompt.md`, `agent.py` | Explains the agents view, `<routing_hint>`, `<related_agents>` and the tool's answers; replaces upstream's "reuse even if the name is unrelated". |
 | Email events | `server/services/gmail/importance_watcher.py` | Notifications carry thread id and sender, so a reply wakes the agent that owns the conversation. |
+| Learning from clarifications | `tools.py`, `resolver.py`, `registry.py` | When Poke has to ask "which one?", the user's phrase ("the alice thing") is remembered for 24 h; when the work then goes to one of the options, that agent learns the phrase as an alias and the resolver settles it in code next time. Two-word minimum so a bare name never hijacks every message about that person. |
 | Legacy mode | `OPENPOKE_ROUTER=legacy` | Byte-identical upstream prompt, tools and behaviour (tested). |
 
 ## Beyond the brief (fixed in code)
@@ -101,6 +102,8 @@ _Filled in from `evals/results/` after the headline runs._
 - Trigger claim/lease so a reminder fires once across workers and restarts.
 - Per-turn result batches so fast answers do not wait for slow agents.
 - Prompt-caching layout: stable system prompt and working set first, the turn last.
-- Learn from clarifications: store "the lunch one" → #40 as an alias so the same phrase
-  resolves next time (scaffolded: `alias` refs are already indexed and matched).
+- Evaluate learning-from-clarifications with multi-turn scenarios (it is built and unit
+  tested; the single-turn eval cannot exercise it).
+- Optional embeddings in `search_agents` for paraphrases with no shared words ("that japan
+  food list" vs "Tokyo Ramen Search"), fused with the lexical ranking.
 - Multi-tenant storage (Postgres, tenant-partitioned refs and FTS) and push-based Gmail.
