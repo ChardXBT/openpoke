@@ -6,6 +6,7 @@ import { ChatHeader } from '@/components/chat/ChatHeader';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { ChatMessages } from '@/components/chat/ChatMessages';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { PokePanel } from '@/components/PokePanel';
 import { useAutoScroll } from '@/components/chat/useAutoScroll';
 import type { ChatBubble } from '@/components/chat/types';
 
@@ -229,6 +230,7 @@ export default function Page() {
 
   return (
     <main className="chat-bg min-h-screen p-4 sm:p-6">
+      <div className="mx-auto flex w-full max-w-6xl items-start gap-6">
       <div className="chat-wrap flex flex-col">
         <ChatHeader onOpenSettings={openSettings} onClearHistory={triggerClearHistory} />
 
@@ -254,6 +256,10 @@ export default function Page() {
         </div>
 
         <SettingsModal open={open} onClose={closeSettings} settings={settings} onSave={setSettings} />
+      </div>
+      <aside className="hidden w-80 shrink-0 lg:block">
+        <PokePanel />
+      </aside>
       </div>
     </main>
   );

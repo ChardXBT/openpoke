@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from ...config import get_settings
 from ...services.execution import get_execution_agent_logs
 from ...logging_config import logger
 
@@ -29,6 +30,25 @@ You have access to Gmail tools to help complete your tasks. When given instructi
 Be thorough, accurate, and efficient in your execution."""
 
 
+def _about_user_section(limit: int = 12) -> str:
+    """The user's stated preferences, routines and facts, so drafts and bookings fit them."""
+    try:
+        from ...services.profile.store import get_profile_store
+
+        facts = get_profile_store().current()[-limit:]
+    except Exception as exc:  # personal memory must never break an agent
+        logger.debug(f"execution agent: profile unavailable: {exc}")
+        return ""
+    if not facts:
+        return ""
+    lines = "\n".join(f.line() for f in facts)
+    return (
+        "# About the user\n"
+        "Facts the user told the assistant about themself. Follow their preferences (for example how "
+        "emails should be written and signed) unless the instructions say otherwise.\n" + lines
+    )
+
+
 class ExecutionAgent:
     """Manages state and history for an execution agent."""
 
@@ -43,10 +63,15 @@ class ExecutionAgent:
 
         Args:
             name: Human-readable agent name (e.g., 'conversation with keith')
-            conversation_limit: Optional limit on past conversations to include (None = all)
+            conversation_limit: Past requests to include. None uses the configured default;
+                zero or a negative value includes all history.
         """
         self.name = name
-        self.conversation_limit = conversation_limit
+        self.conversation_limit = (
+            get_settings().execution_history_limit
+            if conversation_limit is None
+            else conversation_limit
+        )
         self._log_store = get_execution_agent_logs()
 
     # Generate system prompt template with agent name and purpose derived from name
@@ -54,10 +79,12 @@ class ExecutionAgent:
         """Build the system prompt for this agent."""
         agent_purpose = f"Handle tasks related to: {self.name}"
 
-        return SYSTEM_PROMPT_TEMPLATE.format(
+        prompt = SYSTEM_PROMPT_TEMPLATE.format(
             agent_name=self.name,
             agent_purpose=agent_purpose
         )
+        about = _about_user_section()
+        return f"{prompt}\n\n{about}" if about else prompt
 
     # Combine base system prompt with conversation history, applying conversation limits
     def build_system_prompt_with_history(self) -> str:

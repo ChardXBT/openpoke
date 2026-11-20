@@ -74,7 +74,7 @@ def _validate_gmail_connection() -> Optional[str]:
 def _validate_openrouter_config() -> Tuple[Optional[str], Optional[str]]:
     """Validate OpenRouter configuration and return (api_key, model) or (None, error)."""
     settings = get_settings()
-    api_key = settings.openrouter_api_key
+    api_key = settings.llm_api_key
     if not api_key:
         return None, ERROR_OPENROUTER_NOT_CONFIGURED
     return api_key, settings.execution_agent_search_model

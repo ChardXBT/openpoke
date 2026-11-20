@@ -39,6 +39,29 @@ def _env_int(name: str, fallback: int) -> int:
         return fallback
 
 
+DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
+DEFAULT_OPENAI_MODEL = "gpt-6.1-terra"
+ROUTER_MODES = ("reference", "legacy")
+PROVIDERS = ("openrouter", "openai")
+
+
+def _env_provider() -> str:
+    provider = (os.getenv("OPENPOKE_PROVIDER") or "openrouter").strip().lower()
+    return provider if provider in PROVIDERS else "openrouter"
+
+
+def _env_model() -> str:
+    explicit = (os.getenv("OPENPOKE_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    return DEFAULT_OPENAI_MODEL if _env_provider() == "openai" else DEFAULT_MODEL
+
+
+def _env_router_mode() -> str:
+    mode = (os.getenv("OPENPOKE_ROUTER") or "reference").strip().lower()
+    return mode if mode in ROUTER_MODES else "reference"
+
+
 class Settings(BaseModel):
     """Application settings with lightweight env fallbacks."""
 
@@ -47,23 +70,40 @@ class Settings(BaseModel):
     app_version: str = Field(default=DEFAULT_APP_VERSION)
 
     # Server runtime
-    server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "0.0.0.0"))
+    # Localhost by default: the API has no auth and can read and send your email, so it must not
+    # be reachable from the network unless you choose that (OPENPOKE_HOST=0.0.0.0).
+    server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "127.0.0.1"))
     server_port: int = Field(default=_env_int("OPENPOKE_PORT", 8001))
 
-    # LLM model selection
-    interaction_agent_model: str = Field(default="anthropic/claude-sonnet-4")
-    execution_agent_model: str = Field(default="anthropic/claude-sonnet-4")
-    execution_agent_search_model: str = Field(default="anthropic/claude-sonnet-4")
-    summarizer_model: str = Field(default="anthropic/claude-sonnet-4")
-    email_classifier_model: str = Field(default="anthropic/claude-sonnet-4")
+    # LLM model selection. anthropic/claude-sonnet-4 is no longer served on
+    # OpenRouter (checked 2026-11-20); OPENPOKE_MODEL overrides all five.
+    interaction_agent_model: str = Field(default_factory=lambda: _env_model())
+    execution_agent_model: str = Field(default_factory=lambda: _env_model())
+    execution_agent_search_model: str = Field(default_factory=lambda: _env_model())
+    summarizer_model: str = Field(default_factory=lambda: _env_model())
+    email_classifier_model: str = Field(default_factory=lambda: _env_model())
+
+    # Agent routing: "reference" (bounded working set + resolver) or "legacy"
+    # (upstream behaviour: every agent name on every turn).
+    router_mode: str = Field(default_factory=lambda: _env_router_mode())
+    # Execution agents replay at most this many past requests of their own history.
+    execution_history_limit: int = Field(
+        default_factory=lambda: _env_int("OPENPOKE_EXEC_HISTORY_LIMIT", 20)
+    )
 
     # Credentials / integrations
     openrouter_api_key: Optional[str] = Field(default=os.getenv("OPENROUTER_API_KEY"))
+    # LLM provider: "openrouter" (default) or "openai" (OpenAI API directly with OPENAI_API_KEY).
+    llm_provider: str = Field(default_factory=lambda: _env_provider())
+    openai_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
 
     # HTTP behaviour
-    cors_allow_origins_raw: str = Field(default=os.getenv("OPENPOKE_CORS_ALLOW_ORIGINS", "*"))
+    # Only the web UI's origin by default: with "*", any web page you visit could script your Poke.
+    # (The web UI calls the API server-side, so it needs no CORS at all.)
+    cors_allow_origins_raw: str = Field(
+        default=os.getenv("OPENPOKE_CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"))
     enable_docs: bool = Field(default=os.getenv("OPENPOKE_ENABLE_DOCS", "1") != "0")
     docs_url: Optional[str] = Field(default=os.getenv("OPENPOKE_DOCS_URL", "/docs"))
 
@@ -82,6 +122,18 @@ class Settings(BaseModel):
     def resolved_docs_url(self) -> Optional[str]:
         """Return documentation URL when docs are enabled."""
         return (self.docs_url or "/docs") if self.enable_docs else None
+
+    # Personal memory: learn lasting facts from the user's own messages (cheap model, background).
+    learn_enabled: bool = Field(default_factory=lambda: os.getenv("OPENPOKE_LEARN", "1") != "0")
+    # Demo mailbox: a local fake Gmail (nothing is sent anywhere); OPENPOKE_FAKE_GMAIL=1.
+    fake_gmail: bool = Field(default_factory=lambda: os.getenv("OPENPOKE_FAKE_GMAIL", "0") == "1")
+    memory_model: str = Field(default_factory=lambda: (os.getenv("OPENPOKE_MEMORY_MODEL") or (
+        "gpt-6-luna" if _env_provider() == "openai" else "anthropic/claude-haiku-5.5")).strip())
+
+    @property
+    def llm_api_key(self) -> Optional[str]:
+        """API key for the active provider."""
+        return self.openai_api_key if self.llm_provider == "openai" else self.openrouter_api_key
 
     @property
     def summarization_enabled(self) -> bool:

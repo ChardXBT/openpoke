@@ -1,0 +1,258 @@
+{
+  "b0_names|openai:gpt-6.1-terra|30": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.8709677419354839,
+    "accuracy_ci": [
+      0.7419354838709677,
+      0.967741935483871
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.03571428571428571,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 0.0,
+    "over_ask_rate": 0.0,
+    "missed_ask_rate": 1.0,
+    "prompt_tokens_mean": 9977.354838709678,
+    "latency_p50": 5.081,
+    "latency_p95": 6.265,
+    "cost_per_turn": 0.01045041935483871,
+    "by_family": {
+      "1": 1.0,
+      "2": 0.667,
+      "3": 1.0,
+      "4": 0.0,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b0_names|openai:gpt-6.1-terra|1000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.8064516129032258,
+    "accuracy_ci": [
+      0.6774193548387096,
+      0.9354838709677419
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.07142857142857142,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 0.0,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 1.0,
+    "prompt_tokens_mean": 39344.58064516129,
+    "latency_p50": 5.679,
+    "latency_p95": 24.983,
+    "cost_per_turn": 0.03982006451612903,
+    "by_family": {
+      "1": 1.0,
+      "2": 0.333,
+      "3": 1.0,
+      "4": 0.0,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b2_common|openai:gpt-6.1-terra|30": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.9032258064516129,
+    "accuracy_ci": [
+      0.7741935483870968,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 0.3333333333333333,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.6666666666666666,
+    "prompt_tokens_mean": 10843.09677419355,
+    "latency_p50": 4.782,
+    "latency_p95": 7.31,
+    "cost_per_turn": 0.011247290322580645,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 0.333,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b2_common|openai:gpt-6.1-terra|1000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.8387096774193549,
+    "accuracy_ci": [
+      0.7096774193548387,
+      0.967741935483871
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.03571428571428571,
+    "false_reuse_rate": 0.3333333333333333,
+    "clarify_recall": 0.0,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 1.0,
+    "prompt_tokens_mean": 11523.870967741936,
+    "latency_p50": 4.865,
+    "latency_p95": 6.641,
+    "cost_per_turn": 0.011955645161290322,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 0.0,
+      "5": 1.0,
+      "6": 0.333,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "b2_common|openai:gpt-6.1-terra|5000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.8387096774193549,
+    "accuracy_ci": [
+      0.7096774193548387,
+      0.967741935483871
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.03571428571428571,
+    "false_reuse_rate": 0.3333333333333333,
+    "clarify_recall": 0.3333333333333333,
+    "over_ask_rate": 0.07142857142857142,
+    "missed_ask_rate": 0.6666666666666666,
+    "prompt_tokens_mean": 10700.870967741936,
+    "latency_p50": 4.33,
+    "latency_p95": 7.137,
+    "cost_per_turn": 0.011097483870967742,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 0.75,
+      "4": 0.333,
+      "5": 1.0,
+      "6": 0.333,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "ours|openai:gpt-6.1-terra|30": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 1.0,
+    "accuracy_ci": [
+      1.0,
+      1.0
+    ],
+    "duplicate_rate": 0.0,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.0,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 14000.709677419354,
+    "latency_p50": 4.474,
+    "latency_p95": 6.804,
+    "cost_per_turn": 0.014390387096774194,
+    "by_family": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  },
+  "ours|openai:gpt-6.1-terra|1000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.9032258064516129,
+    "accuracy_ci": [
+      0.8064516129032258,
+      1.0
+    ],
+    "duplicate_rate": 0.04,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 1.0,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.0,
+    "prompt_tokens_mean": 14530.129032258064,
+    "latency_p50": 4.57,
+    "latency_p95": 6.905,
+    "cost_per_turn": 0.014914483870967742,
+    "by_family": {
+      "1": 0.667,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 0.667,
+      "10": 1.0
+    }
+  },
+  "ours|openai:gpt-6.1-terra|5000": {
+    "n": 31,
+    "does_not_fit": 0,
+    "errors": 0,
+    "accuracy": 0.9032258064516129,
+    "accuracy_ci": [
+      0.7741935483870968,
+      1.0
+    ],
+    "duplicate_rate": 0.04,
+    "wrong_reuse_rate": 0.0,
+    "false_reuse_rate": 0.0,
+    "clarify_recall": 0.6666666666666666,
+    "over_ask_rate": 0.03571428571428571,
+    "missed_ask_rate": 0.3333333333333333,
+    "prompt_tokens_mean": 15375.58064516129,
+    "latency_p50": 4.603,
+    "latency_p95": 6.417,
+    "cost_per_turn": 0.015802516129032256,
+    "by_family": {
+      "1": 0.667,
+      "2": 1.0,
+      "3": 1.0,
+      "4": 0.667,
+      "5": 1.0,
+      "6": 0.667,
+      "7": 1.0,
+      "8": 1.0,
+      "9": 1.0,
+      "10": 1.0
+    }
+  }
+}

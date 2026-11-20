@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
@@ -23,6 +24,24 @@ def _resolve_interaction_runtime() -> "InteractionAgentRuntime":
     from ...agents.interaction_agent.runtime import InteractionAgentRuntime
 
     return InteractionAgentRuntime()
+
+
+_ADDRESS = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def _event_for(email: Optional[ProcessedEmail]):
+    """Routing metadata for a surfaced email: thread id and bare sender address."""
+    if email is None:
+        return None
+    from ..execution.resolver import EventMeta
+
+    match = _ADDRESS.search(email.sender or "")
+    return EventMeta(
+        kind="email",
+        thread_id=email.thread_id or None,
+        sender=match.group(0).casefold() if match else None,
+        subject=email.subject or None,
+    )
 
 
 DEFAULT_POLL_INTERVAL_SECONDS = 60.0
@@ -204,7 +223,7 @@ class ImportantEmailWatcher:
                 continue
 
             summaries_sent += 1
-            await self._dispatch_summary(summary)
+            await self._dispatch_summary(summary, email)
 
         if processed_ids:
             self._seen_store.mark_seen(processed_ids)
@@ -219,11 +238,17 @@ class ImportantEmailWatcher:
         )
         self._complete_poll(user_now)
 
-    async def _dispatch_summary(self, summary: str) -> None:
+    async def _dispatch_summary(self, summary: str, email: Optional[ProcessedEmail] = None) -> None:
         runtime = _resolve_interaction_runtime()
         try:
             contextualized = f"Important email watcher notification:\n{summary}"
-            await runtime.handle_agent_message(contextualized)
+            event = _event_for(email)
+            if event is None:
+                await runtime.handle_agent_message(contextualized)
+            else:
+                # Thread id and sender let the router wake the agent that owns this
+                # conversation instead of spawning a new one for every alert.
+                await runtime.handle_agent_message(contextualized, event=event)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "Failed to dispatch important email summary",

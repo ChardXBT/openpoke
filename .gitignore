@@ -44,3 +44,10 @@ server/venv/
 # Generated documentation / analysis artifacts
 server/repomix-output.txt
 server/plans/
+
+# Eval caches (model list, prices, embeddings) and scratch runs
+evals/.cache/
+evals/runs/
+
+# Local Claude Code preview config
+.claude/

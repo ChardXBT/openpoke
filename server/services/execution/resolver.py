@@ -1,0 +1,521 @@
+"""Resolve which execution agent a message or event refers to, in code.
+
+Most routing mistakes at scale are reference mistakes: which draft does "send it"
+mean, which Alice, is this the old thread or new work. Many of those can be
+settled from data the system already has — thread and draft ids, ``#ids``, the
+open items it just showed the user, the metadata on an incoming email. This
+module settles what it can and says honestly when something is ambiguous.
+
+Rules, first match wins:
+1. explicit  — ``#id`` (not "invoice #402"), a thread/draft id, or an exact agent name.
+2. event     — an email notification's thread id, else an open item waiting on its sender.
+               Events use only this rule: their text is untrusted email content.
+3. reference — short replies ("send it", "did she reply?", "cancel that") matched
+               against open items surfaced in the last few transcript entries.
+4. entity    — a person named in the message, matched to that person's open items,
+               with the message's topic words breaking ties.
+Otherwise unresolved: the Interaction Agent decides from the working set and search.
+
+The resolver never raises; on any internal error it returns ``unresolved``.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from html import unescape
+from typing import Iterable, Optional
+
+from ...logging_config import logger
+from .registry import AgentRecord, AgentRegistry, normalize_name
+from .working_set import STATE_LABELS
+
+OPEN_STATES = frozenset({"waiting_on_user", "waiting_on_others", "scheduled", "running", "failed"})
+TRANSCRIPT_WINDOW = 12  # entries scanned for surfaced agents...
+SURFACED_MAX_AGE_HOURS = 8  # ...but only those within this long of the newest entry
+
+_HASH_ID = re.compile(r"(?<![\w&])#(\d{1,7})\b")
+_NUMBER_WORDS = frozenset(
+    "invoice order ticket issue pr case po no number item room flight seat apt apartment unit bill "
+    "receipt confirmation booking reservation account ref reference".split()
+)
+_ID_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{4,}$")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_WORD = re.compile(r"[0-9a-z]+")
+_ENTRY = re.compile(r"<(user_message|poke_reply|agent_message)\b([^>]*)>(.*?)</\1>", re.S)
+_STAMP = re.compile(r'timestamp="(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"')
+_RESULT_LINE = re.compile(r"^\[(SUCCESS|FAILED)\]\s+(.*)$")
+_DRAFT_TO = re.compile(r"\bto:\s*([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.I)
+
+_CONFIRM = re.compile(
+    r"^(yes|yep|yeah|yup|ok|okay|k|sure|go ahead|do it|send it|ship it|looks good|lgtm|sounds good|"
+    r"perfect|great|confirm(ed)?|approve(d)?)\b"
+)
+_ANAPHOR = re.compile(
+    r"\b(it|that|this|them|those|that one|this one|the one|the draft|the email|the reminder|the message)\b"
+)
+_ACTION = re.compile(
+    r"\b(send|cancel|move|reschedule|change|edit|delete|forward|reply|update|push|stop|approve|resend)\b"
+)
+_STATUS = re.compile(
+    r"\b(did|has|have)\b.*\b(reply|replied|respond|responded|answer|answered|get back|got back|"
+    r"write back|wrote back|say|said)\b"
+    r"|\b(any|anything)\s+(reply|response|update|news|word|new)\b"
+    r"|\bheard back\b"
+)
+_SEND_WORDS = re.compile(r"\b(yes|yep|yeah|yup|ok|okay|sure|go ahead|send|ship|forward|reply|approve|confirm)\b")
+_SCHEDULE_WORDS = re.compile(r"\b(cancel|move|reschedule|stop|push|change the time|snooze)\b")
+
+_IRREVERSIBLE = re.compile(
+    r"\b(send|sends|sending|forward|forwarding|reply|respond|execute|delete|remove|cancel|"
+    r"unsubscribe|pay|purchase|book|accept|decline)\b"
+)
+# Noun uses ("Bob's last reply", "a book about", "look forward to") are not actions.
+_NOUN_USES = re.compile(
+    r"(?:\b(?:the|a|an|his|her|their|its|my|your|our|last|latest|any|no|first|new|that|this)\s+|'s\s+)"
+    r"(?:reply|replies|response|responses|book|booking|forward)\b"
+    r"|\blook(?:ing)?\s+forward\b"
+)
+_DRAFT_ONLY = re.compile(r"\b(draft|prepare|write|compose)\b")
+_HARD_ACTION = re.compile(r"\b(send|forward|delete|cancel|execute|pay)\b")
+_NEGATED_SEND = re.compile(r"\b(don'?t|do not|without|never)\s+(send|sending)\b")
+
+_STOP = frozenset(
+    "a an and any anything are about as at be been but by can could did do does done for from get got "
+    "go has have he her hers him his how i if in into is it its just let me my new no not now of ok on "
+    "one or our out please re she so some that the their them then there they this those to too up us "
+    "was we what when where which who why will with would yes yep yeah you your back reply replied "
+    "send sent tell ask email emails draft drafts message update news works work thing things stuff "
+    "still yet today tomorrow week also".split()
+)
+
+
+@dataclass
+class EventMeta:
+    kind: str
+    thread_id: Optional[str] = None
+    sender: Optional[str] = None
+    subject: Optional[str] = None
+
+
+@dataclass
+class Resolution:
+    kind: str  # "resolved" | "ambiguous" | "unresolved"
+    candidates: list[int] = field(default_factory=list)
+    reason: str = ""
+    rule: str = ""
+
+
+UNRESOLVED = Resolution("unresolved")
+
+
+# ---------------------------------------------------------------- classifiers
+def is_irreversible(instructions: str) -> bool:
+    text = _NOUN_USES.sub(" ", (instructions or "").casefold())
+    if not _IRREVERSIBLE.search(text) or _NEGATED_SEND.search(text):
+        return False
+    if _DRAFT_ONLY.search(text) and not _HARD_ACTION.search(text):
+        return False
+    return True
+
+
+def is_reference_message(text: str) -> bool:
+    lowered = " ".join((text or "").casefold().split())
+    if not lowered or len(lowered.split()) > 12:
+        return False
+    return bool(
+        _CONFIRM.search(lowered)
+        or _STATUS.search(lowered)
+        or (_ANAPHOR.search(lowered) and _ACTION.search(lowered))
+    )
+
+
+def _content_tokens(text: str) -> list[str]:
+    out: list[str] = []
+    for token in _WORD.findall((text or "").casefold()):
+        if len(token) >= 3 and token not in _STOP and token not in out:
+            out.append(token)
+    return out
+
+
+_ALIAS_DROP = frozenset(
+    "the a an ok okay k yes yep yeah sure please send it that this now any update updates on movement "
+    "news with about for to go ahead and do did what whats is re one ones status check how going".split()
+)
+
+
+def alias_phrase(text: str) -> str:
+    """The referring words of a message ("ok send the alice thing" -> "alice thing")."""
+    words = [w for w in _WORD.findall((text or "").casefold()) if len(w) >= 2 and w not in _ALIAS_DROP]
+    return " ".join(dict.fromkeys(words))
+
+
+def _alias(reg: AgentRegistry, text: str) -> Resolution:
+    """Phrases the user used before, learned when they answered a "which one?" question."""
+    message = set(alias_phrase(text).split())
+    if not message:
+        return UNRESOLVED
+    with reg.connection() as conn:
+        rows = conn.execute("SELECT agent_id, value FROM agent_refs WHERE kind = 'alias'").fetchall()
+    best: dict[int, int] = {}
+    for row in rows:
+        words = set(row["value"].split())
+        if len(words) >= 2 and words <= message:
+            agent_id = int(row["agent_id"])
+            best[agent_id] = max(best.get(agent_id, 0), len(words))
+    if not best:
+        return UNRESOLVED
+    top = max(best.values())
+    ids = [a for a, n in best.items() if n == top]
+    phrase = next(r["value"] for r in rows if int(r["agent_id"]) == ids[0])
+    return _single_or_ambiguous(ids, f'you called it "{phrase}" before', "alias")
+
+
+def _stem(token: str) -> str:
+    return token[:-1] if len(token) > 4 and token.endswith("s") else token
+
+
+# ---------------------------------------------------------------- transcript
+def _find_agent_by_result_line(reg: AgentRegistry, rest: str) -> Optional[AgentRecord]:
+    start = 0
+    while True:
+        idx = rest.find(": ", start)
+        candidate = rest if idx < 0 else rest[:idx]
+        rec = reg.find(candidate.strip())
+        if rec is not None:
+            return rec
+        if idx < 0:
+            return None
+        start = idx + 2
+
+
+def _entry_time(attrs: str) -> Optional[datetime]:
+    match = _STAMP.search(attrs or "")
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def surfaced_agents(reg: AgentRegistry, transcript: str, window: int = TRANSCRIPT_WINDOW) -> list[int]:
+    """Agent ids surfaced in the recent transcript, newest first.
+
+    Looks at the last ``window`` entries that are also within SURFACED_MAX_AGE_HOURS of
+    the newest one, so an item shown and deferred days ago does not count. Agent results
+    ("[SUCCESS] <name>: ...") name their agent; Poke's draft previews ("To: alice@acme.com")
+    point at the agent holding a draft for that address.
+    """
+    entries = _ENTRY.findall(transcript or "")[-window:]
+    newest = next((t for t in (_entry_time(a) for _, a, _ in reversed(entries)) if t), None)
+    if newest is not None:
+        cutoff = newest - timedelta(hours=SURFACED_MAX_AGE_HOURS)
+        entries = [e for e in entries if (_entry_time(e[1]) or newest) >= cutoff]
+    found: list[int] = []
+    for tag, _attrs, payload in reversed(entries):
+        text = unescape(payload)
+        if tag == "agent_message":
+            batch: list[int] = []
+            for line in text.splitlines():
+                match = _RESULT_LINE.match(line.strip())
+                if not match:
+                    continue
+                rec = _find_agent_by_result_line(reg, match.group(2))
+                if rec is not None and rec.id not in batch:
+                    batch.append(rec.id)
+            # Within one batch, later lines are not "newer"; keep the batch order reversed
+            # so the newest entry's agents come first and earlier batches follow.
+            for agent_id in reversed(batch):
+                if agent_id not in found:
+                    found.append(agent_id)
+        elif tag == "poke_reply":
+            for email in _DRAFT_TO.findall(text):
+                for rec in reg.owners("contact", email, include_archived=False):
+                    if rec.state == "waiting_on_user" and rec.id not in found:
+                        found.append(rec.id)
+    return found
+
+
+# ---------------------------------------------------------------- helpers
+def _single_or_ambiguous(ids: list[int], reason: str, rule: str) -> Resolution:
+    unique = list(dict.fromkeys(ids))
+    if not unique:
+        return UNRESOLVED
+    if len(unique) == 1:
+        return Resolution("resolved", unique, reason, rule)
+    return Resolution("ambiguous", unique, reason, rule)
+
+
+def _agent_words(reg: AgentRegistry, rec: AgentRecord) -> set[str]:
+    words = set(_WORD.findall(f"{rec.name} {rec.topic} {rec.state_note}".casefold()))
+    for ref in reg.refs(rec.id):
+        if ref.kind in {"contact", "contact_name", "subject", "alias"}:
+            words.update(_WORD.findall(ref.value.casefold()))
+    return {_stem(w) for w in words if len(w) >= 3}
+
+
+def _word_hit(token: str, words: set[str]) -> bool:
+    """Exact match, or a shared prefix of at least 4 letters ("conference" ~ "conf", "watching" ~ "watch")."""
+    if token in words:
+        return True
+    if len(token) < 4:
+        return False
+    return any(len(w) >= 4 and (w.startswith(token) or token.startswith(w)) for w in words)
+
+
+# Words that say what to do, or ask how a matter is going, not what it is about: they can't tell
+# one matter from another ("did omar ever pay", "any movement on the alice thing").
+_ACTION_WORDS = frozenset(
+    "approve approved nudge chase follow check stop cancel push move forward remind reminder schedule book "
+    "call confirm confirmed ping see find look looks good great fine okay sure ahead ship write prep prepare "
+    "set change make add remove delete again quick quickly ever movement progress status happening going "
+    "pay paid paying respond responded answer answered sign signed agree agreed accept accepted decide decided "
+    "ask asking asked gotten heard hear word anything note notes mail letter text".split()
+)
+
+
+def _topic_tokens(text: str, exclude: Iterable[str] = ()) -> list[str]:
+    """Stemmed content words that could say which matter is meant (no names, actions or status words)."""
+    skip = set(exclude)
+    return [_stem(t) for t in _content_tokens(text)
+            if t not in skip and t not in _ACTION_WORDS and _stem(t) not in _ACTION_WORDS]
+
+
+def _off_topic(reg: AgentRegistry, ids: list[int], text: str, exclude: Iterable[str] = ()) -> bool:
+    """The message says what it is about, and that fits none of these items ("ask alice if thursday
+    lunch works" when Alice's only open item is the Q3 deck): it is other work for the same person."""
+    tokens = _topic_tokens(text, exclude)
+    if not tokens:
+        return False
+    return not any(_word_hit(t, _agent_words(reg, rec)) for rec in reg.get_many(ids) for t in tokens)
+
+
+def _narrow_by_detail(reg: AgentRegistry, ids: list[int], text: str, exclude: Iterable[str] = ()) -> list[int]:
+    """Keep the single candidate whose words best match the message's content words, if unique."""
+    tokens = _topic_tokens(text, exclude)
+    if len(ids) < 2 or not tokens:
+        return ids
+    scores = []
+    for rec in reg.get_many(ids):
+        words = _agent_words(reg, rec)
+        scores.append((sum(1 for t in tokens if _word_hit(t, words)), rec.id))
+    scores.sort(reverse=True)
+    if scores and scores[0][0] > 0 and (len(scores) == 1 or scores[0][0] > scores[1][0]):
+        return [scores[0][1]]
+    return ids
+
+
+def _explicit(reg: AgentRegistry, text: str) -> Resolution:
+    ids: list[int] = []
+    for match in _HASH_ID.finditer(text):
+        before = re.findall(r"[a-z]+", text[: match.start()].casefold())
+        if before and before[-1] in _NUMBER_WORDS:
+            continue
+        rec = reg.get(int(match.group(1)))
+        if rec is not None:
+            ids.append(rec.id)
+    for raw in text.split():
+        token = raw.strip(".,;:!?()[]{}\"'")
+        if _ID_LIKE.match(token) and any(ch.isdigit() for ch in token):
+            for kind in ("thread", "draft"):
+                ids.extend(rec.id for rec in reg.owners(kind, token))
+    if not ids and len(text) <= 160:
+        rec = reg.find(text)
+        if rec is not None and normalize_name(text) == rec.name_key:
+            ids.append(rec.id)
+    return _single_or_ambiguous(ids, "the message names it directly", "explicit")
+
+
+def _event(reg: AgentRegistry, event: EventMeta) -> Resolution:
+    if event.thread_id:
+        owners = reg.owners("thread", event.thread_id)
+        if owners:
+            return Resolution(
+                "resolved", [owners[0].id], f"the incoming email is on its thread {event.thread_id}", "event"
+            )
+    if event.sender:
+        waiting = [
+            r for r in reg.owners("contact", event.sender, include_archived=False)
+            if r.state in {"waiting_on_others", "waiting_on_user"}
+        ]
+        prefer = [r for r in waiting if r.state == "waiting_on_others"] or waiting
+        if prefer:
+            return _single_or_ambiguous(
+                [r.id for r in prefer], f"it is waiting on {event.sender}, who just emailed", "event"
+            )
+    return UNRESOLVED
+
+
+def _wanted_states(lowered: str) -> tuple[Optional[set[str]], str]:
+    """Which open states the message's action can apply to (None: any)."""
+    if _STATUS.search(lowered):
+        return {"waiting_on_others"}, "a status question about the reply Poke is waiting on"
+    if _SCHEDULE_WORDS.search(lowered):
+        return {"scheduled", "waiting_on_user"}, "refers to the item just discussed"
+    if _SEND_WORDS.search(lowered):
+        return {"waiting_on_user"}, "confirms the draft Poke just showed"
+    return None, "refers to the item just discussed"
+
+
+def _reference(reg: AgentRegistry, text: str, transcript: str) -> Resolution:
+    lowered = text.casefold()
+    surfaced = reg.get_many(surfaced_agents(reg, transcript))
+    if not surfaced:
+        return UNRESOLVED
+    wanted, why = _wanted_states(lowered)
+    # A send/status/schedule action never falls back to an item in the wrong state:
+    # "send it" cannot mean an item that is waiting on someone else's reply.
+    ids = [r.id for r in surfaced if r.state in (wanted or OPEN_STATES)]
+    if not ids:
+        return UNRESOLVED
+    ids = _narrow_by_detail(reg, ids, text)
+    return _single_or_ambiguous(ids, why, "reference")
+
+
+def _personal_contacts(text: str) -> tuple[list[str], list[str]]:
+    """People the user told Poke about ("my mom", "my dentist"): their emails and the words used."""
+    try:
+        from ..profile.store import get_profile_store
+
+        people = get_profile_store().people()
+    except Exception:  # pragma: no cover - personal memory is optional
+        return [], []
+    words = set(_WORD.findall((text or "").casefold()))
+    emails, used = [], []
+    for person in people:
+        subject_words = set(person.subject.split())
+        if person.email and subject_words and subject_words <= words:
+            emails.append(person.email)
+            used.extend(subject_words)
+    return emails, used
+
+
+def _contacts_named(reg: AgentRegistry, text: str) -> tuple[list[AgentRecord], list[str]]:
+    agents: dict[int, AgentRecord] = {}
+    personal_emails, personal_words = _personal_contacts(text)
+    for email in _EMAIL.findall(text) + personal_emails:
+        for rec in reg.owners("contact", email):
+            agents.setdefault(rec.id, rec)
+    used: list[str] = list(personal_words)
+    tokens = _content_tokens(_EMAIL.sub(" ", text))[:8]
+    if tokens:
+        with reg.connection() as conn:
+            for token in tokens:
+                rows = conn.execute(
+                    "SELECT DISTINCT agent_id FROM agent_refs WHERE "
+                    "(kind = 'contact_name' AND (value = ? OR value LIKE ? OR value LIKE ? OR value LIKE ?)) OR "
+                    "(kind = 'contact' AND (value LIKE ? OR value LIKE ? OR value LIKE ?))",
+                    (token, f"{token} %", f"% {token}", f"% {token} %",
+                     f"{token}.%@%", f"{token}@%", f"%.{token}@%"),
+                ).fetchall()
+                if rows:
+                    used.append(token)
+                    ids = [int(r["agent_id"]) for r in rows]
+                    for rec in reg.get_many(ids):
+                        agents.setdefault(rec.id, rec)
+    return list(agents.values()), used
+
+
+def _entity(reg: AgentRegistry, text: str) -> Resolution:
+    agents, name_tokens = _contacts_named(reg, text)
+    open_agents = [r for r in agents if not r.archived and r.state in OPEN_STATES]
+    if not open_agents:
+        return UNRESOLVED
+    open_agents.sort(key=lambda r: r.last_active_at, reverse=True)
+    # New work for someone who has open items is not one of them. Kept for an irreversible step
+    # with several candidates: asking which one is the safe outcome there.
+    if _off_topic(reg, [r.id for r in open_agents], text, name_tokens) and (
+            len(open_agents) == 1 or not is_irreversible(text)):
+        return UNRESOLVED
+    # Topic words first: they are the strongest evidence of which matter is meant.
+    ids = _narrow_by_detail(reg, [r.id for r in open_agents], text, exclude=name_tokens)
+    if len(ids) > 1:
+        # Words did not decide; the action might: "stop/cancel" -> reminders or drafts,
+        # "send" -> drafts, "did she reply" -> items waiting on a reply.
+        wanted, _ = _wanted_states(text.casefold())
+        fitting = [i for i in ids if wanted and reg.get(i).state in wanted]
+        if fitting:
+            ids = _narrow_by_detail(reg, fitting, text, exclude=name_tokens)
+    who = ", ".join(name_tokens) or "the person named"
+    reason = f"the only open item for {who}" if len(ids) == 1 and len(open_agents) == 1 else f"open item for {who}"
+    return _single_or_ambiguous(ids, reason, "entity")
+
+
+# ---------------------------------------------------------------- entry points
+def resolve(
+    reg: AgentRegistry,
+    text: str,
+    transcript: str = "",
+    event: Optional[EventMeta] = None,
+) -> Resolution:
+    try:
+        if event is not None:
+            # Only the event's structured metadata (thread id, sender address) counts. The
+            # notification text is untrusted email content: running the text rules on it
+            # would let any sender steer the trusted <routing_hint> by writing "#12", an
+            # agent's name or a contact's name.
+            return _event(reg, event)
+        message = (text or "").strip()
+        if not message:
+            return UNRESOLVED
+        res = _explicit(reg, message)
+        if res.kind != "unresolved":
+            return res
+        res = _alias(reg, message)
+        if res.kind == "resolved":
+            return res
+        # A person named in the message is stronger evidence than "just surfaced":
+        # "the workshop email to jen looks good, send it" means Jen's draft even if
+        # another item was shown more recently.
+        named = _entity(reg, message)
+        if named.kind == "resolved":
+            return named
+        if is_reference_message(message):
+            res = _reference(reg, message, transcript)
+            if res.kind != "unresolved":
+                if named.kind == "ambiguous":
+                    both = [c for c in res.candidates if c in named.candidates]
+                    if both:
+                        return _single_or_ambiguous(both, res.reason, "reference")
+                return res
+        if named.kind == "ambiguous":
+            # Several items for this person, but only one is what the conversation was just
+            # about (often the one the user picked when Poke last asked): that is the one meant.
+            recent = [c for c in named.candidates if c in surfaced_agents(reg, transcript)]
+            if len(recent) == 1:
+                return Resolution("resolved", recent, "it is the one the conversation was just about", "recent")
+        return named
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"resolver: falling back to unresolved: {exc}")
+        return UNRESOLVED
+
+
+def _short(rec: AgentRecord) -> str:
+    label = STATE_LABELS.get(rec.state, rec.state)
+    note = f": {rec.state_note}" if rec.state_note and rec.state != "done" else ""
+    archived = "archived, " if rec.archived else ""
+    return f"#{rec.id} {rec.name} ({archived}{label}{note})"
+
+
+def render_hint(reg: AgentRegistry, res: Resolution) -> str:
+    if res.kind == "unresolved" or not res.candidates:
+        return ""
+    recs = reg.get_many(res.candidates)
+    if not recs:
+        return ""
+    if res.kind == "resolved":
+        return f"Likely about {_short(recs[0])}. Why: {res.reason}. Reuse this agent for it."
+    options = "; ".join(_short(r) for r in recs[:4])
+    return (
+        f"Ambiguous: this could be {options}. If the conversation already shows which one the user "
+        "means, use it. Otherwise, before anything is sent, replied, forwarded, deleted or cancelled, "
+        "ask the user which one in one short question."
+    )
+
+
+__all__ = [
+    "EventMeta", "Resolution", "resolve", "render_hint", "surfaced_agents",
+    "is_irreversible", "is_reference_message", "OPEN_STATES",
+]
