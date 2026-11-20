@@ -137,7 +137,7 @@ async def run_turn(setup: Setup, world: World, scenario: Scenario, client, rep: 
             messages.append(_tool_message(call, name, args, result))
 
     decision = extract_decision(calls, user_msgs, prepared.resolve_target)
-    if decision.kind == "OTHER" and scenario.gold.agent_id is not None and user_msgs:
+    if decision.dispatches == 0 and scenario.gold.agent_id is not None and user_msgs:
         gold = next((a for a in world.agents if a.id == scenario.gold.agent_id), None)
         if gold is not None:
             decision.answered = answer_matches(f"{gold.state_note} {gold.topic}", user_msgs[-1])

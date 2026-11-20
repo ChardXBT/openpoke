@@ -219,6 +219,17 @@ def _legacy_send_message_to_agent(agent_name: str, instructions: str) -> ToolRes
 
 
 _SEND_ACTION = re.compile(r"\b(send|sending|forward|forwarding|reply|respond|execute)\b")
+_SCHEDULE_ACTION = re.compile(r"\b(cancel|stop|pause|delete the reminder|remove the reminder|reschedule|move)\b")
+
+
+def _action_states(instructions: str):
+    """Open states an irreversible instruction can apply to (None when unclear)."""
+    text = instructions.casefold()
+    if _SCHEDULE_ACTION.search(text):
+        return {"scheduled", "waiting_on_user"}
+    if _SEND_ACTION.search(text):
+        return {"waiting_on_user", "waiting_on_others"}  # send a draft, or reply on a thread
+    return None
 _WORD = re.compile(r"[0-9a-z]+")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _DUP_NAME_OVERLAP = 0.6
@@ -265,9 +276,19 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
         irreversible = is_send = False
         create_new = True
 
-    # 1. Ambiguity contract: never guess on a step that cannot be undone.
+    # 1. Ambiguity contract: never guess on a step that cannot be undone. Candidates that
+    #    the action cannot apply to (sending something with no draft, cancelling something
+    #    with no reminder) are not real alternatives.
     if res.kind == "ambiguous" and irreversible and (target is None or target.id not in ctx.created):
-        options = reg.get_many(res.candidates)
+        candidates = reg.get_many(res.candidates)
+        states = _action_states(instructions)
+        fitting = [c for c in candidates if states is None or c.state in states] or candidates
+        if target is not None and [c.id for c in fitting] == [target.id]:
+            fitting = []  # the only candidate the action fits is the one chosen: no real ambiguity
+    else:
+        fitting = []
+    if fitting:
+        options = fitting
         return ToolResult(success=False, payload={
             "status": "needs_user_choice",
             "message": "Ambiguous request and the next step cannot be undone. Ask the user which one; do not pick.",

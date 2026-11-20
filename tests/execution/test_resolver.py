@@ -144,8 +144,40 @@ def test_rule4_one_live_matter(reg):
 
 
 def test_rule4_two_live_matters_ambiguous(reg):
-    res = resolve(reg, "anything new with alice?", "")
+    res = resolve(reg, "what's going on with alice", "")
     assert res.kind == "ambiguous" and sorted(res.candidates) == [1, 2]
+
+
+def test_rule4_status_question_picks_the_item_waiting_on_her(reg):
+    # Only the lunch thread is waiting on Alice's reply; the deck draft is waiting on the user.
+    res = resolve(reg, "anything new with alice?", "")
+    assert (res.kind, res.candidates) == ("resolved", [2])
+
+
+def test_named_person_beats_just_surfaced(reg):
+    # Bob's draft was not surfaced; the lunch thread was. "send it" + "bob" -> Bob's draft.
+    res = resolve(reg, "the invoice nudge to bob looks good, send it", LUNCH_SENT)
+    assert (res.kind, res.candidates) == ("resolved", [3])
+
+
+def test_send_never_falls_back_to_a_waiting_item(reg):
+    # Only a waiting-on-reply item was surfaced: "send it" cannot mean it.
+    assert resolve(reg, "ok send it", LUNCH_SENT).kind != "resolved" or \
+        resolve(reg, "ok send it", LUNCH_SENT).candidates != [2]
+
+
+def test_prefix_words_break_entity_ties(reg):
+    res = resolve(reg, "stop the alice lunch planning", "")
+    assert res.candidates == [2]
+
+
+def test_old_surfaced_item_outside_time_window(reg):
+    old = (
+        '<agent_message timestamp="2026-11-17 09:00:00">[SUCCESS] Bob invoice follow-up: Draft ready</agent_message>\n'
+        '<poke_reply timestamp="2026-11-17 09:01:00">later then</poke_reply>\n'
+    )
+    res = resolve(reg, "yes send it", old + ONE_DRAFT)
+    assert (res.kind, res.candidates) == ("resolved", [1])
 
 
 def test_rule4_topic_breaks_the_tie(reg):

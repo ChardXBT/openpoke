@@ -264,3 +264,8 @@ def test_id_with_trailing_name_resolves():
     resolve = id_or_name_resolver(make_world())
     assert resolve("#2 Bob invoice follow-up") == 2
     assert resolve("#2") == 2 and resolve("#99 Nope") is None
+
+
+def test_recall_answer_with_offer_is_correct():
+    offered = Decision("ASK", asked=True, answered=True)
+    assert grade(offered, _sc(Gold("agent", 6), family=9)) == "correct"

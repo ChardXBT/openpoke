@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from html import unescape
 from typing import Iterable, Optional
 
@@ -30,7 +31,8 @@ from .registry import AgentRecord, AgentRegistry, normalize_name
 from .working_set import STATE_LABELS
 
 OPEN_STATES = frozenset({"waiting_on_user", "waiting_on_others", "scheduled", "running", "failed"})
-TRANSCRIPT_WINDOW = 8  # entries scanned for surfaced agents
+TRANSCRIPT_WINDOW = 12  # entries scanned for surfaced agents...
+SURFACED_MAX_AGE_HOURS = 8  # ...but only those within this long of the newest entry
 
 _HASH_ID = re.compile(r"(?<![\w&])#(\d{1,7})\b")
 _NUMBER_WORDS = frozenset(
@@ -40,7 +42,8 @@ _NUMBER_WORDS = frozenset(
 _ID_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{4,}$")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _WORD = re.compile(r"[0-9a-z]+")
-_ENTRY = re.compile(r"<(user_message|poke_reply|agent_message)\b[^>]*>(.*?)</\1>", re.S)
+_ENTRY = re.compile(r"<(user_message|poke_reply|agent_message)\b([^>]*)>(.*?)</\1>", re.S)
+_STAMP = re.compile(r'timestamp="(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"')
 _RESULT_LINE = re.compile(r"^\[(SUCCESS|FAILED)\]\s+(.*)$")
 _DRAFT_TO = re.compile(r"\bto:\s*([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.I)
 
@@ -153,15 +156,31 @@ def _find_agent_by_result_line(reg: AgentRegistry, rest: str) -> Optional[AgentR
         start = idx + 2
 
 
-def surfaced_agents(reg: AgentRegistry, transcript: str, window: int = TRANSCRIPT_WINDOW) -> list[int]:
-    """Agent ids surfaced in the last ``window`` transcript entries, newest first.
+def _entry_time(attrs: str) -> Optional[datetime]:
+    match = _STAMP.search(attrs or "")
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
 
-    Agent results ("[SUCCESS] <name>: ...") name their agent; Poke's draft previews
-    ("To: alice@acme.com") point at the agent holding a draft for that address.
+
+def surfaced_agents(reg: AgentRegistry, transcript: str, window: int = TRANSCRIPT_WINDOW) -> list[int]:
+    """Agent ids surfaced in the recent transcript, newest first.
+
+    Looks at the last ``window`` entries that are also within SURFACED_MAX_AGE_HOURS of
+    the newest one, so an item shown and deferred days ago does not count. Agent results
+    ("[SUCCESS] <name>: ...") name their agent; Poke's draft previews ("To: alice@acme.com")
+    point at the agent holding a draft for that address.
     """
     entries = _ENTRY.findall(transcript or "")[-window:]
+    newest = next((t for t in (_entry_time(a) for _, a, _ in reversed(entries)) if t), None)
+    if newest is not None:
+        cutoff = newest - timedelta(hours=SURFACED_MAX_AGE_HOURS)
+        entries = [e for e in entries if (_entry_time(e[1]) or newest) >= cutoff]
     found: list[int] = []
-    for tag, payload in reversed(entries):
+    for tag, _attrs, payload in reversed(entries):
         text = unescape(payload)
         if tag == "agent_message":
             batch: list[int] = []
@@ -203,6 +222,15 @@ def _agent_words(reg: AgentRegistry, rec: AgentRecord) -> set[str]:
     return {_stem(w) for w in words if len(w) >= 3}
 
 
+def _word_hit(token: str, words: set[str]) -> bool:
+    """Exact match, or a shared prefix of at least 4 letters ("conference" ~ "conf", "watching" ~ "watch")."""
+    if token in words:
+        return True
+    if len(token) < 4:
+        return False
+    return any(len(w) >= 4 and (w.startswith(token) or token.startswith(w)) for w in words)
+
+
 def _narrow_by_detail(reg: AgentRegistry, ids: list[int], text: str, exclude: Iterable[str] = ()) -> list[int]:
     """Keep the single candidate whose words best match the message's content words, if unique."""
     skip = set(exclude)
@@ -212,7 +240,7 @@ def _narrow_by_detail(reg: AgentRegistry, ids: list[int], text: str, exclude: It
     scores = []
     for rec in reg.get_many(ids):
         words = _agent_words(reg, rec)
-        scores.append((sum(1 for t in tokens if t in words), rec.id))
+        scores.append((sum(1 for t in tokens if _word_hit(t, words)), rec.id))
     scores.sort(reverse=True)
     if scores and scores[0][0] > 0 and (len(scores) == 1 or scores[0][0] > scores[1][0]):
         return [scores[0][1]]
@@ -260,22 +288,26 @@ def _event(reg: AgentRegistry, event: EventMeta) -> Resolution:
     return UNRESOLVED
 
 
+def _wanted_states(lowered: str) -> tuple[Optional[set[str]], str]:
+    """Which open states the message's action can apply to (None: any)."""
+    if _STATUS.search(lowered):
+        return {"waiting_on_others"}, "a status question about the reply Poke is waiting on"
+    if _SCHEDULE_WORDS.search(lowered):
+        return {"scheduled", "waiting_on_user"}, "refers to the item just discussed"
+    if _SEND_WORDS.search(lowered):
+        return {"waiting_on_user"}, "confirms the draft Poke just showed"
+    return None, "refers to the item just discussed"
+
+
 def _reference(reg: AgentRegistry, text: str, transcript: str) -> Resolution:
     lowered = text.casefold()
     surfaced = reg.get_many(surfaced_agents(reg, transcript))
     if not surfaced:
         return UNRESOLVED
-    if _STATUS.search(lowered):
-        wanted, why = {"waiting_on_others"}, "a status question about the reply Poke is waiting on"
-    elif _SCHEDULE_WORDS.search(lowered):
-        wanted, why = {"scheduled", "waiting_on_user"}, "refers to the item just discussed"
-    elif _SEND_WORDS.search(lowered):
-        wanted, why = {"waiting_on_user"}, "confirms the draft Poke just showed"
-    else:
-        wanted, why = set(OPEN_STATES), "refers to the item just discussed"
-    ids = [r.id for r in surfaced if r.state in wanted]
-    if not ids:
-        ids = [r.id for r in surfaced if r.state in OPEN_STATES]
+    wanted, why = _wanted_states(lowered)
+    # A send/status/schedule action never falls back to an item in the wrong state:
+    # "send it" cannot mean an item that is waiting on someone else's reply.
+    ids = [r.id for r in surfaced if r.state in (wanted or OPEN_STATES)]
     if not ids:
         return UNRESOLVED
     ids = _narrow_by_detail(reg, ids, text)
@@ -313,7 +345,15 @@ def _entity(reg: AgentRegistry, text: str) -> Resolution:
     if not open_agents:
         return UNRESOLVED
     open_agents.sort(key=lambda r: r.last_active_at, reverse=True)
+    # Topic words first: they are the strongest evidence of which matter is meant.
     ids = _narrow_by_detail(reg, [r.id for r in open_agents], text, exclude=name_tokens)
+    if len(ids) > 1:
+        # Words did not decide; the action might: "stop/cancel" -> reminders or drafts,
+        # "send" -> drafts, "did she reply" -> items waiting on a reply.
+        wanted, _ = _wanted_states(text.casefold())
+        fitting = [i for i in ids if wanted and reg.get(i).state in wanted]
+        if fitting:
+            ids = _narrow_by_detail(reg, fitting, text, exclude=name_tokens)
     who = ", ".join(name_tokens) or "the person named"
     reason = f"the only open item for {who}" if len(ids) == 1 and len(open_agents) == 1 else f"open item for {who}"
     return _single_or_ambiguous(ids, reason, "entity")
@@ -337,11 +377,21 @@ def resolve(
         res = _explicit(reg, message)
         if res.kind != "unresolved":
             return res
+        # A person named in the message is stronger evidence than "just surfaced":
+        # "the workshop email to jen looks good, send it" means Jen's draft even if
+        # another item was shown more recently.
+        named = _entity(reg, message)
+        if named.kind == "resolved":
+            return named
         if is_reference_message(message):
             res = _reference(reg, message, transcript)
             if res.kind != "unresolved":
+                if named.kind == "ambiguous":
+                    both = [c for c in res.candidates if c in named.candidates]
+                    if both:
+                        return _single_or_ambiguous(both, res.reason, "reference")
                 return res
-        return _entity(reg, message)
+        return named
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(f"resolver: falling back to unresolved: {exc}")
         return UNRESOLVED

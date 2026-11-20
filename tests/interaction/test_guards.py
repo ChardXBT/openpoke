@@ -105,3 +105,14 @@ def test_legacy_mode_unchanged(routing):
     assert routing.roster.agents == ["Brand new"]
     assert routing.reg.find("Brand new") is None
     assert routing.tools_mod.handle_tool_call("search_agents", {"query": "x"}).payload["error"].startswith("Unknown tool")
+
+
+def test_contract_narrows_by_action_state(routing):
+    # Ambiguous between a draft (#1) and an item waiting on a reply (#3). "Cancel the draft"
+    # can only apply to the draft, so choosing #1 is not a guess.
+    mixed = Resolution("ambiguous", [1, 3], "open item for alice", "entity")
+    allowed = _call(routing, mixed, "#1", "Cancel the draft, the user no longer wants it.")
+    assert allowed.payload["status"] == "submitted"
+    # Two drafts: a send still fits both, so it is still blocked.
+    blocked = _call(routing, AMBIGUOUS, "#1", "Send the draft.")
+    assert blocked.payload["status"] == "needs_user_choice"

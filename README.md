@@ -1,5 +1,26 @@
 # OpenPoke 🌴
 
+> **This fork: reference-first routing for agent overload.** Instead of showing the
+> Interaction Agent every execution agent ever created, it shows the user's *open items*
+> (drafts waiting for approval, replies being waited on, reminders), resolves references
+> like "send it", "did she reply?" and incoming email replies **in code** from thread,
+> draft and contact ids, and **asks the user** instead of guessing when a step that cannot
+> be undone is ambiguous. Everything older is one `search_agents` call away.
+>
+> - Write-up, method and results: [`docs/agent-overload.md`](docs/agent-overload.md)
+> - What other forks built, and where it stopped working: [`docs/research/2026-11-20-fork-survey.md`](docs/research/2026-11-20-fork-survey.md)
+> - Design and plan: [`docs/superpowers/specs/`](docs/superpowers/specs/), [`docs/superpowers/plans/`](docs/superpowers/plans/)
+>
+> ```bash
+> python -m pytest                       # offline test suite, no keys needed
+> python -m evals.harness.runner --setups b0,b2,ours --split dev --sizes 30,1000 \
+>     --model anthropic/claude-haiku-5.5 --max-usd 2 --out evals/runs/try
+> python -m evals.harness.report evals/runs/try --out evals/runs/try/report
+> ```
+>
+> `OPENPOKE_ROUTER=legacy` restores upstream behaviour byte-for-byte. Default model is now
+> `anthropic/claude-sonnet-5.5` (`claude-sonnet-4` is no longer served); override with `OPENPOKE_MODEL`.
+
 OpenPoke is a simplified, open-source take on [Interaction Company’s](https://interaction.co/about) [Poke](https://poke.com/) assistant—built to show how a multi-agent orchestration stack can feel genuinely useful. It keeps the handful of things Poke is great at (email triage, reminders, and persistent agents) while staying easy to spin up locally.
 
 - Multi-agent FastAPI backend that mirrors Poke's interaction/execution split, powered by [OpenRouter](https://openrouter.ai/).

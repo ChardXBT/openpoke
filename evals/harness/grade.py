@@ -78,8 +78,8 @@ def grade(decision: Decision, scenario: Scenario) -> str:
         if decision.kind in ("agent", "NEW"):
             return "missed_ask"
         return "other"
-    if scenario.family in RECALL_FAMILIES and decision.kind == "OTHER" and decision.answered:
-        return "correct"
+    if scenario.family in RECALL_FAMILIES and decision.dispatches == 0 and decision.answered:
+        return "correct"  # answered from the card; a trailing offer ("want me to...?") is fine
     if scenario.family == INBOUND_FAMILY and decision.kind in ("OTHER", "ASK"):
         # Told the user (often offering a next step as a question), created nothing,
         # touched nothing wrong: the right behaviour for a watcher notification.
