@@ -60,3 +60,21 @@ Remaining Ours misses at 1,000 and what was done:
   grader counts as over-asking for every setup alike. Grading limitation, noted.
 
 Held-out set frozen by hash (`heldout.sha256`, 4249db74…) before any held-out run.
+
+## heldout-haiku (stopped deliberately at 5,000 agents)
+
+Held-out, 31 scenarios × 2 reps, sizes 30/200/1,000 complete for B0, B2, Ours; B0 at
+5,000 has 51 of 62 turns. Stopped because B0's cost exploded: at 5,000 agents a turn is
+227k prompt tokens and **$0.115** (OpenRouter's reported cost: about 5× Haiku's list price
+per token at that prompt length), versus **$0.002** for Ours. Projected B0 cost at 20,000
+agents was ~$28 for this run alone, so B0 at 20,000 is run on a small sample instead, and
+B2/Ours at 5,000 and 20,000 run separately (`heldout-haiku-scale`).
+
+Latency (p50 per turn): B0 3.2 s → 3.6 s → 3.6 s → 5.3 s from 30 to 5,000 agents (p95 18 s
+at 1,000); Ours 2.9–3.1 s at every size.
+
+Held-out misses for Ours (reported, not tuned on): 4 of 7 are family 10 (repeat after a
+clarification: the model even wrote "the one you picked earlier" and still asked; this is
+the corrections-memory feature that is not built); 2 are a needle the lexical search missed
+(new agent instead of the old airline one); 1 is a multi-dispatch turn the grader scores by
+its last dispatch.
