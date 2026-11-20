@@ -25,6 +25,7 @@ from evals.schema import PreparedTurn, Scenario, World, WorldAgent
 
 _EMBEDDING_MODEL = "text-embedding-3-small"
 _EMBEDDING_CACHE_DIR = Path(__file__).parents[1] / ".cache" / "embeddings"
+_HTTP_CLIENT = None  # shared httpx.Client for embedding requests
 _RRF_K = 60
 _DEFAULT_DUP_THRESHOLD = 0.62
 _TOKEN_RE = re.compile(r"#?\w+(?:[.@+-]\w+)*", re.UNICODE)
@@ -396,7 +397,10 @@ class B2Common:
         except ImportError as exc:  # pragma: no cover - deployment dependency check
             raise RuntimeError("httpx is required for OpenAI embeddings") from exc
 
-        response = httpx.post(
+        global _HTTP_CLIENT
+        if _HTTP_CLIENT is None:  # one client: building an SSL context per call costs ~0.7 s on Windows
+            _HTTP_CLIENT = httpx.Client(timeout=60.0)
+        response = _HTTP_CLIENT.post(
             "https://api.openai.com/v1/embeddings",
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": _EMBEDDING_MODEL, "input": texts},
