@@ -291,3 +291,17 @@ def test_cli_prints_counts(capsys):
     out = capsys.readouterr().out
     assert "waiting_on_user" in out and "archived" in out
     assert "family 10" in out
+
+
+def test_pair_histories_do_not_single_out_one_item():
+    """Family 4/5 pair histories end with a Poke message that names both items."""
+    from evals.world.generate import build_world
+    from evals.world.scenarios import build_scenarios
+
+    for seed in (1, 2):
+        world = build_world(30, seed)
+        for scenario in build_scenarios(world):
+            if scenario.family != 4:
+                continue
+            last_poke = [t for t in scenario.history if t.role == "poke"][-1].text
+            assert last_poke.startswith(("Both", "Sent both", "Two")), (scenario.id, last_poke)

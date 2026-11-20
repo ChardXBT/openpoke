@@ -463,12 +463,43 @@ def _open_background(ctx: _Ctx, avoid: set[str], used: set[int]) -> list[Turn]:
     return turns
 
 
+# Poke's last message in a pair history presents BOTH items without singling one out,
+# so a bare "send it" / "cancel it" is genuinely ambiguous (family 4) and only the
+# message's own detail can settle it (family 5). Wording differs per split.
+_COMBINED_RELAY = {
+    "dev": {
+        "waiting_on_user": "Both drafts are ready: to {a_first} about {a_short}, and to {b_first} about {b_short}.",
+        "waiting_on_others": "Sent both: {a_first} about {a_short} and {b_first} about {b_short}. I'll tell you when they reply.",
+        "scheduled": "Both reminders are set: {a_short} and {b_short}.",
+    },
+    "heldout": {
+        "waiting_on_user": "Two drafts waiting on you: {a_first} ({a_short}) and {b_first} ({b_short}).",
+        "waiting_on_others": "Both went out: {a_first} ({a_short}) and {b_first} ({b_short}). Watching for replies.",
+        "scheduled": "Two reminders on: {a_short} and {b_short}.",
+    },
+}
+
+
+def _combined_relay(ctx: _Ctx, first: str, second: str, at: datetime) -> Turn:
+    state = ctx.agent(second).state
+    a, b = ctx.facts(first), ctx.facts(second)
+    text = _COMBINED_RELAY[ctx.split][state].format(
+        a_first=a["first"], a_short=a["short"], b_first=b["first"], b_short=b["short"]
+    )
+    return _turn("poke", text, at)
+
+
 def _pair_history(ctx: _Ctx, first: str, second: str, used: set[int]) -> list[Turn]:
-    """Two items surfaced back to back (earlier one first), ending 1-2 turns after the second."""
+    """Two items surfaced back to back (earlier one first), ending 1-2 turns after the second.
+
+    The relay after the second item mentions both, so neither is singled out by Poke.
+    """
     first, second = sorted((first, second), key=ctx.at)
     a, b = _surface(ctx, first), _surface(ctx, second, relay=False)
     middle = _chatter(ctx, _end_of(a), _start_of(b), ctx.rng.randint(0, 1), used)
-    return _prelude(ctx, _start_of(a), used) + a + middle + b + _tail(ctx, second, ctx.rng.randint(1, 2), used)
+    tail = _tail(ctx, second, ctx.rng.randint(1, 2), used)
+    tail[0] = _combined_relay(ctx, first, second, parse_iso(tail[0].ts))
+    return _prelude(ctx, _start_of(a), used) + a + middle + b + tail
 
 
 def _scenario(ctx: _Ctx, family: int, index: int, history: list[Turn], message: Optional[str], gold: Gold,
