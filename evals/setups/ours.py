@@ -88,8 +88,11 @@ class Ours:
                     current_turn.reset(token)
             payload = dict(result.payload or {})
             if name == "send_message_to_agent" and payload.get("status") == "submitted":
-                payload.setdefault("resolved_id", None if payload.get("new_agent_created")
-                                   else parse_agent_id(str(payload.get("agent", ""))))
+                agent_id = None if payload.get("new_agent_created") else parse_agent_id(str(payload.get("agent", "")))
+                # An agent created earlier in this turn is still new work, not reuse of a world agent.
+                if agent_id is not None and (agent_id in ctx.created or agent_id not in world_ids):
+                    agent_id = None
+                payload.setdefault("resolved_id", agent_id)
             return payload
 
         def resolve_target(agent_name: str) -> Optional[int]:
