@@ -355,11 +355,16 @@ class AgentRegistry:
             ).fetchone()
         return int(row[0])
 
-    def recent(self, limit: int = 5, exclude: Iterable[int] = frozenset()) -> list[AgentRecord]:
+    def recent(
+        self, limit: int = 5, exclude: Iterable[int] = frozenset(), only_closed: bool = False
+    ) -> list[AgentRecord]:
+        """Most recently active unarchived agents; ``only_closed`` keeps just ``done`` ones."""
         skip = set(exclude)
+        state_clause = "AND state = 'done'" if only_closed else ""
         with self.connection() as conn:
             rows = conn.execute(
-                f"SELECT {_COLUMNS} FROM agents WHERE archived = 0 ORDER BY last_active_at DESC, id DESC LIMIT ?",
+                f"SELECT {_COLUMNS} FROM agents WHERE archived = 0 {state_clause} "
+                "ORDER BY last_active_at DESC, id DESC LIMIT ?",
                 (limit + len(skip),),
             ).fetchall()
         out = [_row_to_record(r) for r in rows if int(r["id"]) not in skip]
