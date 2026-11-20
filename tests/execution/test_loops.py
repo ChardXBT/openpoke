@@ -119,6 +119,20 @@ def test_paused_trigger_clears_flag(reg):
     assert rec.state == "done"
 
 
+def test_rescheduled_trigger_updates_note(reg):
+    agent_id = loops.begin_run(reg, "Reminder – Call mom", "remind me at 6pm")
+    loops.observe_tool_call(reg, agent_id, "createTrigger", {"payload": "call mom", "start_time": "2026-11-21T18:00:00"},
+                            {"trigger_id": 1}, True)
+    loops.finish_run(reg, agent_id, True, has_active_trigger=lambda n: True)
+    agent_id = loops.begin_run(reg, "Reminder – Call mom", "push it to 7pm")
+    loops.observe_tool_call(reg, agent_id, "updateTrigger", {"trigger_id": 1, "start_time": "2026-11-21T19:00:00-05:00"},
+                            {"ok": True}, True)
+    loops.finish_run(reg, agent_id, True, has_active_trigger=lambda n: True)
+    rec = reg.get(agent_id)
+    assert rec.state == "scheduled"
+    assert "19:00" in rec.state_note and "18:00" not in rec.state_note
+
+
 def test_trigger_fire_keeps_scheduled_agent_scheduled(reg):
     agent_id = loops.begin_run(reg, "Gym reminder", "remind me")
     loops.finish_run(reg, agent_id, True, has_active_trigger=lambda name: True)

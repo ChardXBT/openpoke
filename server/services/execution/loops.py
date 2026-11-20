@@ -134,8 +134,13 @@ def observe_tool_call(
         status = str(args.get("status") or "").lower()
         if status in {"paused", "completed"}:
             reg.set_trigger_flag(agent_id, False)
-        elif status == "active":
+            return
+        if status == "active":
             reg.set_trigger_flag(agent_id, True)
+        when = _clean(args.get("recurrence_rule") or args.get("start_time") or "", 60)
+        if when:  # rescheduled: keep the note truthful, it is shown to the IA every turn
+            reg.set_trigger_flag(agent_id, True)
+            reg.set_state(agent_id, "scheduled", f"reminder scheduled ({when})")
 
 
 def _default_trigger_lookup(name: str) -> bool:
