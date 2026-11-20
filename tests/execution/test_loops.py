@@ -170,3 +170,35 @@ def test_sweep_lapses_and_archives(reg, clock):
     # Lapsing is not activity: idle since day 0, so archived on day 15 like any done agent.
     assert reg.get(waiting).archived is True
     assert reg.get(keeper).archived is False  # active trigger: never archived
+
+
+# --- independent review ------------------------------------------------------------------
+def test_follow_up_without_send_keeps_the_draft_waiting(reg):
+    """"What does the draft say?" runs the agent again but sends nothing: the draft is still
+    awaiting the user's OK and must stay an open item (else "send it" can no longer find it)."""
+    agent_id = loops.begin_run(reg, "Email to Alice", "draft it")
+    loops.observe_tool_call(reg, agent_id, "gmail_create_draft",
+                            {"recipient_email": "alice@acme.com", "subject": "Q3 deck v2"},
+                            {"data": {"id": "dr_1"}}, True)
+    loops.finish_run(reg, agent_id, True, has_active_trigger=_no_triggers)
+    note = reg.get(agent_id).state_note
+    loops.mark_running(reg, agent_id)  # the IA dispatches a follow-up
+    agent_id = loops.begin_run(reg, "Email to Alice", "what does the draft say?")
+    loops.finish_run(reg, agent_id, True, has_active_trigger=_no_triggers)
+    rec = reg.get(agent_id)
+    assert (rec.state, rec.state_note) == ("waiting_on_user", note)
+
+
+def test_sending_the_draft_still_moves_on(reg):
+    agent_id = loops.begin_run(reg, "Email to Alice", "draft it")
+    loops.observe_tool_call(reg, agent_id, "gmail_create_draft", {"recipient_email": "alice@acme.com"},
+                            {"data": {"id": "dr_1"}}, True)
+    loops.finish_run(reg, agent_id, True, has_active_trigger=_no_triggers)
+    agent_id = loops.begin_run(reg, "Email to Alice", "send it")
+    loops.observe_tool_call(reg, agent_id, "gmail_execute_draft", {"draft_id": "dr_1"}, {"successful": True}, True)
+    loops.finish_run(reg, agent_id, True, has_active_trigger=_no_triggers)
+    assert reg.get(agent_id).state == "waiting_on_others"
+    # and a later plain run is not "restored" to the old draft state
+    agent_id = loops.begin_run(reg, "Email to Alice", "anything else?")
+    loops.finish_run(reg, agent_id, True, has_active_trigger=_no_triggers)
+    assert reg.get(agent_id).state == "done"

@@ -1,5 +1,6 @@
 """Simplified Execution Agent Runtime."""
 
+import asyncio
 import inspect
 import json
 from typing import Dict, Any, List, Optional, Tuple
@@ -154,6 +155,12 @@ class ExecutionAgentRuntime:
                 response=final_response,
                 tools_executed=tools_executed
             )
+
+        except asyncio.CancelledError:
+            # Timeout (asyncio.wait_for) or shutdown: do not leave the agent "working now".
+            if self._registry_id is not None:
+                self._track(loops.finish_run, self._registry_id, False)
+            raise
 
         except Exception as e:
             logger.error(f"[{self.agent.name}] Execution failed: {e}")
