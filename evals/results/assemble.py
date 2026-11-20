@@ -37,7 +37,8 @@ def _rows(run: str) -> list[dict]:
 def haiku_rows() -> list[dict]:
     final_ours = _rows("heldout-haiku-ours-final")
     rows = [r for r in _rows("heldout-haiku") if not (final_ours and r["setup"] == "ours")]
-    rows += [r for r in _rows("heldout-haiku-scale") if r["size"] == 5000]
+    rows += [r for r in _rows("heldout-haiku-scale")
+             if r["size"] == 5000 and not (final_ours and r["setup"] == "ours")]
     rows += [r for r in _rows("heldout-haiku-20k") if not (final_ours and r["setup"] == "ours")]
     rows += _rows("heldout-b0-20k") + _rows("heldout-b1") + final_ours
     if not final_ours:
