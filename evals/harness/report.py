@@ -165,11 +165,16 @@ def charts(rows: list[dict], out: Path, model: Optional[str] = None) -> list[Pat
             if metric == "accuracy":
                 lo = [p[1]["accuracy_ci"][0] for p in pts]
                 hi = [p[1]["accuracy_ci"][1] for p in pts]
-                ax.fill_between(xs, lo, hi, color=color, alpha=0.12, linewidth=0)
+                ax.fill_between(xs, lo, hi, color=color, alpha=0.07, linewidth=0)
             ax.plot(xs, ys, color=color, linewidth=2, marker="o", markersize=6,
                     markeredgecolor=SURFACE, markeredgewidth=1.5, label=LABELS.get(setup, setup))
+            for (x, s), y in zip(pts, ys):  # small samples are marked so they are not over-read
+                if metric == "accuracy" and s["n"] < 20:
+                    ax.annotate(f"n={s['n']}", (x, y), xytext=(0, -13), textcoords="offset points",
+                                ha="center", fontsize=7.5, color=MUTED)
             ax.annotate(LABELS.get(setup, setup), (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points",
-                        va="center", fontsize=8.5, color=INK)
+                        va="center", fontsize=8.5, color=INK,
+                        bbox=dict(boxstyle="round,pad=0.15", fc=SURFACE, ec="none", alpha=0.85))
         ax.set_xscale("log")
         if logy:
             ax.set_yscale("log")
