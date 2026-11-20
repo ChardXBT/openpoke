@@ -1,11 +1,43 @@
 """Simple agent roster management - just a list of agent names."""
 
 import json
-import fcntl
 import time
 from pathlib import Path
 
 from ...logging_config import logger
+
+try:  # POSIX
+    import fcntl
+except ImportError:  # Windows has no fcntl
+    fcntl = None
+try:  # Windows
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
+
+def _lock_file(handle) -> None:
+    """Take a non-blocking exclusive lock; raise BlockingIOError if it is held."""
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif msvcrt is not None:
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            raise BlockingIOError(str(exc)) from exc
+
+
+def _unlock_file(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    elif msvcrt is not None:
+        try:
+            handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
 
 
 class AgentRoster:
@@ -42,12 +74,12 @@ class AgentRoster:
 
                 # Open file and acquire exclusive lock
                 with open(self._roster_path, 'w') as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    _lock_file(f)
                     try:
                         json.dump(self._agents, f, indent=2)
                         return
                     finally:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        _unlock_file(f)
 
             except BlockingIOError:
                 # Lock is held by another process

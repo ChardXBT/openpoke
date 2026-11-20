@@ -39,6 +39,19 @@ def _env_int(name: str, fallback: int) -> int:
         return fallback
 
 
+DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
+ROUTER_MODES = ("reference", "legacy")
+
+
+def _env_model() -> str:
+    return (os.getenv("OPENPOKE_MODEL") or DEFAULT_MODEL).strip()
+
+
+def _env_router_mode() -> str:
+    mode = (os.getenv("OPENPOKE_ROUTER") or "reference").strip().lower()
+    return mode if mode in ROUTER_MODES else "reference"
+
+
 class Settings(BaseModel):
     """Application settings with lightweight env fallbacks."""
 
@@ -50,12 +63,21 @@ class Settings(BaseModel):
     server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "0.0.0.0"))
     server_port: int = Field(default=_env_int("OPENPOKE_PORT", 8001))
 
-    # LLM model selection
-    interaction_agent_model: str = Field(default="anthropic/claude-sonnet-4")
-    execution_agent_model: str = Field(default="anthropic/claude-sonnet-4")
-    execution_agent_search_model: str = Field(default="anthropic/claude-sonnet-4")
-    summarizer_model: str = Field(default="anthropic/claude-sonnet-4")
-    email_classifier_model: str = Field(default="anthropic/claude-sonnet-4")
+    # LLM model selection. anthropic/claude-sonnet-4 is no longer served on
+    # OpenRouter (checked 2026-11-20); OPENPOKE_MODEL overrides all five.
+    interaction_agent_model: str = Field(default_factory=lambda: _env_model())
+    execution_agent_model: str = Field(default_factory=lambda: _env_model())
+    execution_agent_search_model: str = Field(default_factory=lambda: _env_model())
+    summarizer_model: str = Field(default_factory=lambda: _env_model())
+    email_classifier_model: str = Field(default_factory=lambda: _env_model())
+
+    # Agent routing: "reference" (bounded working set + resolver) or "legacy"
+    # (upstream behaviour: every agent name on every turn).
+    router_mode: str = Field(default_factory=lambda: _env_router_mode())
+    # Execution agents replay at most this many past requests of their own history.
+    execution_history_limit: int = Field(
+        default_factory=lambda: _env_int("OPENPOKE_EXEC_HISTORY_LIMIT", 20)
+    )
 
     # Credentials / integrations
     openrouter_api_key: Optional[str] = Field(default=os.getenv("OPENROUTER_API_KEY"))
