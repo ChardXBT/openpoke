@@ -67,6 +67,12 @@ _IRREVERSIBLE = re.compile(
     r"\b(send|sends|sending|forward|forwarding|reply|respond|execute|delete|remove|cancel|"
     r"unsubscribe|pay|purchase|book|accept|decline)\b"
 )
+# Noun uses ("Bob's last reply", "a book about", "look forward to") are not actions.
+_NOUN_USES = re.compile(
+    r"(?:\b(?:the|a|an|his|her|their|its|my|your|our|last|latest|any|no|first|new|that|this)\s+|'s\s+)"
+    r"(?:reply|replies|response|responses|book|booking|forward)\b"
+    r"|\blook(?:ing)?\s+forward\b"
+)
 _DRAFT_ONLY = re.compile(r"\b(draft|prepare|write|compose)\b")
 _HARD_ACTION = re.compile(r"\b(send|forward|delete|cancel|execute|pay)\b")
 _NEGATED_SEND = re.compile(r"\b(don'?t|do not|without|never)\s+(send|sending)\b")
@@ -102,7 +108,7 @@ UNRESOLVED = Resolution("unresolved")
 
 # ---------------------------------------------------------------- classifiers
 def is_irreversible(instructions: str) -> bool:
-    text = (instructions or "").casefold()
+    text = _NOUN_USES.sub(" ", (instructions or "").casefold())
     if not _IRREVERSIBLE.search(text) or _NEGATED_SEND.search(text):
         return False
     if _DRAFT_ONLY.search(text) and not _HARD_ACTION.search(text):

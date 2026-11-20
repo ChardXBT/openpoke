@@ -163,6 +163,9 @@ def test_long_new_request_unresolved(reg):
     ("The user confirmed. Send the draft to Alice now.", True),
     ("draft a reply to Bob", False), ("find Bob's last email", False), ("look up flights", False),
     ("write a reply but don't send it", False),
+    ("Look up Bob's last reply", False), ("Check whether she sent a reply", False),
+    ("find a book about japan", False), ("tell her I look forward to it", False),
+    ("Reply to Bob with the new date", True), ("book the 7pm table", True),
 ])
 def test_is_irreversible(text, expected):
     assert is_irreversible(text) is expected

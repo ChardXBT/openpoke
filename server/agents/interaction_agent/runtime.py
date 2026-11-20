@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Set
 
 from .agent import build_system_prompt, prepare_message_with_history
 from .tools import ToolResult, get_tool_schemas, handle_tool_call
+from .turn_context import build_turn_context, current_turn
+from ...services.execution.resolver import EventMeta
 from ...config import get_settings
 from ...services.conversation import get_conversation_log, get_working_memory_log
 from ...openrouter_client import request_chat_completion
@@ -69,13 +71,18 @@ class InteractionAgentRuntime:
             transcript_before = self._load_conversation_transcript()
             self.conversation_log.record_user_message(user_message)
 
-            system_prompt = build_system_prompt()
-            messages = prepare_message_with_history(
-                user_message, transcript_before, message_type="user"
-            )
+            ctx = self._turn_context(user_message, transcript_before, "user", None)
+            token = current_turn.set(ctx)
+            try:
+                system_prompt = build_system_prompt()
+                messages = prepare_message_with_history(
+                    user_message, transcript_before, message_type="user", ctx=ctx
+                )
 
-            logger.info("Processing user message through interaction agent")
-            summary = await self._run_interaction_loop(system_prompt, messages)
+                logger.info("Processing user message through interaction agent")
+                summary = await self._run_interaction_loop(system_prompt, messages)
+            finally:
+                current_turn.reset(token)
 
             final_response = self._finalize_response(summary)
 
@@ -97,20 +104,27 @@ class InteractionAgentRuntime:
             )
 
     # Handle incoming messages from execution agents and generate appropriate responses
-    async def handle_agent_message(self, agent_message: str) -> InteractionResult:
-        """Process a status update emitted by an execution agent."""
+    async def handle_agent_message(
+        self, agent_message: str, event: Optional[EventMeta] = None
+    ) -> InteractionResult:
+        """Process a status update from an execution agent or the email watcher (``event``)."""
 
         try:
             transcript_before = self._load_conversation_transcript()
             self.conversation_log.record_agent_message(agent_message)
 
-            system_prompt = build_system_prompt()
-            messages = prepare_message_with_history(
-                agent_message, transcript_before, message_type="agent"
-            )
+            ctx = self._turn_context(agent_message, transcript_before, "agent", event)
+            token = current_turn.set(ctx)
+            try:
+                system_prompt = build_system_prompt()
+                messages = prepare_message_with_history(
+                    agent_message, transcript_before, message_type="agent", event=event, ctx=ctx
+                )
 
-            logger.info("Processing execution agent results")
-            summary = await self._run_interaction_loop(system_prompt, messages)
+                logger.info("Processing execution agent results")
+                summary = await self._run_interaction_loop(system_prompt, messages)
+            finally:
+                current_turn.reset(token)
 
             final_response = self._finalize_response(summary)
 
@@ -189,6 +203,16 @@ class InteractionAgentRuntime:
             logger.warning("Interaction loop exited without assistant content")
 
         return summary
+
+    def _turn_context(self, text, transcript, message_type, event):
+        """Resolve the turn's references once (reference mode); never fail the turn over it."""
+        if self.settings.router_mode != "reference":
+            return None
+        try:
+            return build_turn_context(text, transcript, message_type, event)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"routing context unavailable: {exc}")
+            return None
 
     # Load conversation history, preferring summarized version if available
     def _load_conversation_transcript(self) -> str:

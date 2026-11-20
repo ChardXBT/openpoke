@@ -1,0 +1,107 @@
+from server.agents.interaction_agent.turn_context import TurnContext, current_turn
+from server.services.execution.resolver import Resolution
+
+
+def _call(env, resolution, *args, **kwargs):
+    token = current_turn.set(TurnContext(resolution=resolution))
+    try:
+        return env.tools_mod.send_message_to_agent(*args, **kwargs)
+    finally:
+        current_turn.reset(token)
+
+
+AMBIGUOUS = Resolution("ambiguous", [1, 2], "confirms a draft", "reference")
+UNRESOLVED = Resolution("unresolved")
+
+
+def test_ambiguous_irreversible_blocked(routing):
+    result = _call(routing, AMBIGUOUS, "#1", "The user confirmed. Send the draft now.")
+    assert result.payload["status"] == "needs_user_choice"
+    assert len(result.payload["options"]) == 2
+    assert routing.dispatched == []
+
+
+def test_ambiguous_reversible_dispatched(routing):
+    result = _call(routing, AMBIGUOUS, "#1", "Show me the current text of the draft again.")
+    assert result.payload["status"] == "submitted"
+    assert routing.dispatched == [("Email to Alice – Q3 deck", "Show me the current text of the draft again.")]
+
+
+def test_resolved_single_not_blocked(routing):
+    resolved = Resolution("resolved", [1], "confirms the draft", "reference")
+    result = _call(routing, resolved, "#1", "The user confirmed. Send the draft.")
+    assert result.payload["status"] == "submitted"
+
+
+def test_confirm_target_when_resolution_points_elsewhere(routing):
+    resolved = Resolution("resolved", [1], "confirms the draft", "reference")
+    result = _call(routing, resolved, "#2", "Send the draft.")
+    assert result.payload["status"] == "confirm_target"
+    assert result.payload["suggested"][0].startswith("#1 ")
+    assert routing.dispatched == []
+
+
+def test_irreversible_to_non_waiting_target_confirms(routing):
+    result = _call(routing, UNRESOLVED, "#3", "Send the draft now.")
+    assert result.payload["status"] == "confirm_target"
+    assert {card.split()[0] for card in result.payload["suggested"]} == {"#1", "#2"}
+
+
+def test_thread_owned_spawn_redirects(routing):
+    owned = Resolution("resolved", [3], "the incoming email is on its thread thr_lunch1", "event")
+    result = _call(routing, owned, "Alice lunch reply", "Alice replied about lunch; summarize it.")
+    assert result.payload["status"] == "owned_by"
+    assert result.payload["agent"].startswith("#3 ")
+    assert routing.reg.find("Alice lunch reply") is None
+
+
+def test_possible_duplicate_then_create_new(routing):
+    first = _call(routing, UNRESOLVED, "Email to Alice Q3 deck v3", "Update the deck email for alice.chen@acme.com")
+    assert first.payload["status"] == "possible_duplicate"
+    assert first.payload["candidates"][0].startswith("#1 ")
+    second = _call(routing, UNRESOLVED, "Email to Alice Q3 deck v3", "Update the deck email", create_new=True)
+    assert second.payload["status"] == "submitted"
+    assert second.payload["new_agent_created"] is True
+
+
+def test_same_turn_sibling_not_flagged(routing):
+    ctx = TurnContext(resolution=UNRESOLVED)
+    token = current_turn.set(ctx)
+    try:
+        a = routing.tools_mod.send_message_to_agent("Flight search – Tokyo", "Find flights to Tokyo in March")
+        b = routing.tools_mod.send_message_to_agent("Flight search – Tokyo hotels", "Find hotels in Tokyo in March")
+    finally:
+        current_turn.reset(token)
+    assert a.payload["status"] == "submitted" and b.payload["status"] == "submitted"
+    assert len(routing.dispatched) == 2
+
+
+def test_hash_id_and_normalized_name_reuse(routing):
+    by_id = _call(routing, UNRESOLVED, "#2", "Check whether Bob opened the invoice email")
+    by_name = _call(routing, UNRESOLVED, "bob INVOICE follow-up!!", "Look up Bob's last reply")
+    assert by_id.payload == {"status": "submitted", "agent": "#2 Bob invoice follow-up", "new_agent_created": False}
+    assert by_name.payload["agent"] == "#2 Bob invoice follow-up"
+    assert routing.reg.count() == 4
+
+
+def test_dispatch_marks_agent_working(routing):
+    _call(routing, UNRESOLVED, "Tokyo ramen search", "Find ramen in Shinjuku")
+    assert routing.reg.find("Tokyo ramen search").state == "running"
+
+
+def test_search_agents_tool(routing):
+    result = routing.tools_mod.search_agents("japan visa", include_archived=True)
+    assert result.payload["agents"][0].startswith("#4 Japan visa paperwork")
+    assert routing.tools_mod.search_agents("zzzz").payload["agents"] == ["No matching agents."]
+
+
+def test_legacy_mode_unchanged(routing):
+    routing.state["mode"] = "legacy"
+    assert routing.tools_mod.get_tool_schemas() is routing.tools_mod.TOOL_SCHEMAS
+    result = routing.tools_mod.handle_tool_call(
+        "send_message_to_agent", {"agent_name": "Brand new", "instructions": "x", "create_new": True}
+    )
+    assert result.payload == {"status": "submitted", "agent_name": "Brand new", "new_agent_created": True}
+    assert routing.roster.agents == ["Brand new"]
+    assert routing.reg.find("Brand new") is None
+    assert routing.tools_mod.handle_tool_call("search_agents", {"query": "x"}).payload["error"].startswith("Unknown tool")

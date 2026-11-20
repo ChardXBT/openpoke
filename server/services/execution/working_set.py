@@ -43,19 +43,24 @@ def format_card(reg: AgentRegistry, rec: AgentRecord, now: datetime) -> str:
     return f"#{rec.id} {escape(rec.name, quote=False)} · {escape(status, quote=False)} · {age_label(rec.last_active_at, now)}"
 
 
-def render_working_set(reg: AgentRegistry, now: Optional[datetime] = None) -> str:
+def build_working_set(reg: AgentRegistry, now: Optional[datetime] = None) -> tuple[str, set[int]]:
+    """Return the ``<agents>`` block body and the ids it shows."""
     moment = now or reg.clock()
     sweep(reg, moment)
     open_items = reg.open_items(MAX_OPEN)
     recent = reg.recent(MAX_RECENT, exclude={r.id for r in open_items}, only_closed=True)
     shown = open_items + recent
     if not shown:
-        return "None"
+        return "None", set()
     lines = [format_card(reg, rec, moment) for rec in shown]
     hidden = reg.count(include_archived=True) - len(shown)
     if hidden > 0:
         lines.append(f"+{hidden:,} more agents not shown. Use search_agents to find older work.")
-    return "\n".join(lines)
+    return "\n".join(lines), {rec.id for rec in shown}
 
 
-__all__ = ["format_card", "render_working_set", "STATE_LABELS", "MAX_OPEN", "MAX_RECENT"]
+def render_working_set(reg: AgentRegistry, now: Optional[datetime] = None) -> str:
+    return build_working_set(reg, now)[0]
+
+
+__all__ = ["format_card", "build_working_set", "render_working_set", "STATE_LABELS", "MAX_OPEN", "MAX_RECENT"]
