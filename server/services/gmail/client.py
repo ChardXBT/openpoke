@@ -35,7 +35,13 @@ def _set_active_gmail_user_id(user_id: Optional[str]) -> None:
         _ACTIVE_USER_ID = sanitized or None
 
 
+def _demo_mode() -> bool:
+    return bool(get_settings().fake_gmail)
+
+
 def get_active_gmail_user_id() -> Optional[str]:
+    if _demo_mode():
+        return "demo-user"
     with _ACTIVE_USER_ID_LOCK:
         return _ACTIVE_USER_ID
 
@@ -236,6 +242,11 @@ def initiate_connect(payload: GmailConnectPayload, settings: Settings) -> JSONRe
 
 # Check Gmail connection status and retrieve user account information
 def fetch_status(payload: GmailStatusPayload) -> JSONResponse:
+    if _demo_mode():
+        from .demo_mailbox import ME
+
+        return JSONResponse({"ok": True, "connected": True, "status": "DEMO", "email": ME,
+                             "user_id": "demo-user", "profile": {"emailAddress": ME}, "profile_source": "demo"})
     connection_request_id = _normalized(payload.connection_request_id)
     user_id = _normalized(payload.user_id)
 
@@ -475,6 +486,11 @@ def execute_gmail_tool(
         for key, value in arguments.items():
             if value is not None:
                 prepared_arguments[key] = value
+
+    if _demo_mode():  # local fake mailbox: nothing leaves the machine
+        from .demo_mailbox import get_demo_mailbox
+
+        return get_demo_mailbox().execute(tool_name, prepared_arguments)
 
     prepared_arguments.setdefault("user_id", "me")
 

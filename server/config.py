@@ -120,6 +120,8 @@ class Settings(BaseModel):
 
     # Personal memory: learn lasting facts from the user's own messages (cheap model, background).
     learn_enabled: bool = Field(default_factory=lambda: os.getenv("OPENPOKE_LEARN", "1") != "0")
+    # Demo mailbox: a local fake Gmail (nothing is sent anywhere); OPENPOKE_FAKE_GMAIL=1.
+    fake_gmail: bool = Field(default_factory=lambda: os.getenv("OPENPOKE_FAKE_GMAIL", "0") == "1")
     memory_model: str = Field(default_factory=lambda: (os.getenv("OPENPOKE_MEMORY_MODEL") or (
         "gpt-6-luna" if _env_provider() == "openai" else "anthropic/claude-haiku-5.5")).strip())
 
