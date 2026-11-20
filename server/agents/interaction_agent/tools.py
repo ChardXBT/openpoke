@@ -12,7 +12,7 @@ from ...logging_config import logger
 from ...services.conversation import get_conversation_log
 from ...services.execution import get_agent_roster, get_execution_agent_logs
 from ...services.execution.registry import AgentRecord, get_agent_registry, normalize_name
-from ...services.execution.resolver import OPEN_STATES, is_irreversible
+from ...services.execution.resolver import OPEN_STATES, alias_phrase, is_irreversible
 from ...services.execution.search import search_agents as _search_agents
 from ...services.execution.working_set import format_card
 from ..execution_agent.batch_manager import ExecutionBatchManager
@@ -265,6 +265,19 @@ def _possible_duplicates(reg, agent_name: str, instructions: str, ctx: TurnConte
     return out[:3]
 
 
+def _learn_alias(reg, ctx: TurnContext, target_id: int, created: bool) -> None:
+    """After a "which one?" question, the agent the work goes to learns the phrase the user used."""
+    pending = reg.pending_choice()
+    if not pending or created or target_id not in pending.get("candidates", []):
+        return
+    phrase = str(pending.get("phrase", ""))
+    if alias_phrase(ctx.message) == phrase:  # same ambiguous wording again: not an answer
+        return
+    if len(phrase.split()) >= 2:
+        reg.add_ref(target_id, "alias", phrase)
+    reg.set_meta("pending_choice", None)
+
+
 def _reference_send_message_to_agent(agent_name: str, instructions: str, create_new: bool = False) -> ToolResult:
     reg = get_agent_registry()
     ctx = current_turn.get() or TurnContext()
@@ -289,6 +302,9 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
         fitting = []
     if fitting:
         options = fitting
+        phrase = alias_phrase(ctx.message)
+        if len(phrase.split()) >= 2:  # remember the question, to learn the answer next turn
+            reg.set_pending_choice(phrase, [c.id for c in options])
         return ToolResult(success=False, payload={
             "status": "needs_user_choice",
             "message": "Ambiguous request and the next step cannot be undone. Ask the user which one; do not pick.",
@@ -344,6 +360,7 @@ def _reference_send_message_to_agent(agent_name: str, instructions: str, create_
             ctx.created.add(target.id)
 
     canonical = target.name
+    _learn_alias(reg, ctx, target.id, created)
     # Visible as "working now" immediately, so later calls this turn see it as open work.
     reg.touch(target.id, state="running")
     roster = get_agent_roster()

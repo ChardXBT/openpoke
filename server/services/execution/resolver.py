@@ -138,6 +138,39 @@ def _content_tokens(text: str) -> list[str]:
     return out
 
 
+_ALIAS_DROP = frozenset(
+    "the a an ok okay k yes yep yeah sure please send it that this now any update updates on movement "
+    "news with about for to go ahead and do did what whats is re one ones status check how going".split()
+)
+
+
+def alias_phrase(text: str) -> str:
+    """The referring words of a message ("ok send the alice thing" -> "alice thing")."""
+    words = [w for w in _WORD.findall((text or "").casefold()) if len(w) >= 2 and w not in _ALIAS_DROP]
+    return " ".join(dict.fromkeys(words))
+
+
+def _alias(reg: AgentRegistry, text: str) -> Resolution:
+    """Phrases the user used before, learned when they answered a "which one?" question."""
+    message = set(alias_phrase(text).split())
+    if not message:
+        return UNRESOLVED
+    with reg.connection() as conn:
+        rows = conn.execute("SELECT agent_id, value FROM agent_refs WHERE kind = 'alias'").fetchall()
+    best: dict[int, int] = {}
+    for row in rows:
+        words = set(row["value"].split())
+        if len(words) >= 2 and words <= message:
+            agent_id = int(row["agent_id"])
+            best[agent_id] = max(best.get(agent_id, 0), len(words))
+    if not best:
+        return UNRESOLVED
+    top = max(best.values())
+    ids = [a for a, n in best.items() if n == top]
+    phrase = next(r["value"] for r in rows if int(r["agent_id"]) == ids[0])
+    return _single_or_ambiguous(ids, f'you called it "{phrase}" before', "alias")
+
+
 def _stem(token: str) -> str:
     return token[:-1] if len(token) > 4 and token.endswith("s") else token
 
@@ -376,6 +409,9 @@ def resolve(
             return UNRESOLVED
         res = _explicit(reg, message)
         if res.kind != "unresolved":
+            return res
+        res = _alias(reg, message)
+        if res.kind == "resolved":
             return res
         # A person named in the message is stronger evidence than "just surfaced":
         # "the workshop email to jen looks good, send it" means Jen's draft even if

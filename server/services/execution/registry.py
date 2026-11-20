@@ -391,6 +391,36 @@ class AgentRegistry:
         with self.connection() as conn:
             return int(conn.execute(f"SELECT COUNT(*) FROM agents {clause}").fetchone()[0])
 
+    # ------------------------------------------------------------------ small key/value state
+    def get_meta(self, key: str) -> Optional[str]:
+        with self.connection() as conn:
+            row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: Optional[str]) -> None:
+        with self.connection() as conn:
+            if value is None:
+                conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+            else:
+                conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+
+    def pending_choice(self, max_age_hours: float = 24.0) -> Optional[dict]:
+        """The last "which one?" question Poke had to ask, if recent: {phrase, candidates, at}."""
+        raw = self.get_meta("pending_choice")
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            asked = parse_iso(data["at"])
+        except Exception:
+            return None
+        if (self._clock() - asked).total_seconds() > max_age_hours * 3600:
+            return None
+        return data
+
+    def set_pending_choice(self, phrase: str, candidates: list[int]) -> None:
+        self.set_meta("pending_choice", json.dumps({"phrase": phrase, "candidates": candidates, "at": self._now()}))
+
     def names(self) -> list[str]:
         with self.connection() as conn:
             return [r["name"] for r in conn.execute("SELECT name FROM agents ORDER BY id").fetchall()]

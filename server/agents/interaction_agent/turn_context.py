@@ -17,6 +17,7 @@ class TurnContext:
     created: set[int] = field(default_factory=set)  # agents created earlier in this IA turn
     enforce: bool = True  # ambiguity contract + spawn checks (evals ablate this)
     show_related: bool = True  # <related_agents> section (evals ablate this)
+    message: str = ""  # the user's message this turn (for learning aliases from clarifications)
 
 
 current_turn: ContextVar[Optional[TurnContext]] = ContextVar("openpoke_turn_context", default=None)
@@ -32,4 +33,4 @@ def build_turn_context(
     if message_type == "agent" and event is None:
         return TurnContext(event=None)
     resolution = resolve(get_agent_registry(), latest_text, transcript, event)
-    return TurnContext(resolution=resolution, event=event)
+    return TurnContext(resolution=resolution, event=event, message=latest_text if message_type == "user" else "")
