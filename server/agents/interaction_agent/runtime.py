@@ -160,6 +160,7 @@ class InteractionAgentRuntime:
         """Iteratively query the LLM until it issues a final response."""
 
         summary = _LoopSummary()
+        needs_user_choice = False
 
         for iteration in range(self.MAX_TOOL_ITERATIONS):
             response = await self._make_llm_call(system_prompt, messages)
@@ -193,6 +194,12 @@ class InteractionAgentRuntime:
 
                 result = self._execute_tool(tool_call)
 
+                if tool_call.name == "send_message_to_agent":
+                    needs_user_choice = (
+                        isinstance(result.payload, dict)
+                        and result.payload.get("status") == "needs_user_choice"
+                    )
+
                 if result.user_message:
                     summary.user_messages.append(result.user_message)
 
@@ -203,7 +210,10 @@ class InteractionAgentRuntime:
                 }
                 messages.append(tool_message)
         else:
-            raise RuntimeError("Reached tool iteration limit without final response")
+            if needs_user_choice:
+                summary.last_assistant_text = "Which item do you mean?"
+            else:
+                raise RuntimeError("Reached tool iteration limit without final response")
 
         if not summary.user_messages and not summary.last_assistant_text:
             logger.warning("Interaction loop exited without assistant content")

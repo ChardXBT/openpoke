@@ -69,3 +69,35 @@ def test_clear_send_goes_through(routing, monkeypatch):
     result = asyncio.run(routing.runtime_mod.InteractionAgentRuntime().execute("yes send it"))
     assert result.success
     assert routing.dispatched == [("Email to Alice – Q3 deck", "User confirmed. Send the draft.")]
+
+
+def test_repeated_ambiguous_send_ends_with_clarifying_question(routing, monkeypatch):
+    routing.chat.transcript = TWO_DRAFTS
+    calls = []
+
+    async def fake_completion(**kwargs):
+        calls.append(1)
+        return _response(content="Sending it now.", tool_calls=[
+            _tool_call("retry", "send_message_to_agent",
+                       {"agent_name": "#1", "instructions": "User confirmed. Send the draft."}),
+        ])
+
+    monkeypatch.setattr(routing.runtime_mod, "request_chat_completion", fake_completion)
+    runtime = routing.runtime_mod.InteractionAgentRuntime()
+    result = asyncio.run(runtime.execute("yep send it"))
+
+    assert result.success
+    assert result.response == "Which item do you mean?"
+    assert routing.chat.entries[-1] == ("poke", result.response)
+    assert routing.dispatched == []
+    assert len(calls) == runtime.MAX_TOOL_ITERATIONS
+
+
+def test_iteration_limit_without_ambiguity_still_reports_failure(routing, monkeypatch):
+    async def fake_completion(**kwargs):
+        return _response(tool_calls=[_tool_call("retry", "unknown_tool", {})])
+
+    monkeypatch.setattr(routing.runtime_mod, "request_chat_completion", fake_completion)
+    result = asyncio.run(routing.runtime_mod.InteractionAgentRuntime().execute("hello"))
+    assert not result.success
+    assert result.error == "Reached tool iteration limit without final response"

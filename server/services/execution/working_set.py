@@ -34,13 +34,15 @@ def _trim(text: str, limit: int = _DETAIL_LIMIT) -> str:
 
 
 def format_card(reg: AgentRegistry, rec: AgentRecord, now: datetime) -> str:
-    """One line per agent: '#id name · state: detail · age'. HTML-escaped."""
+    """One line per agent, with HTML-escaped details marked as quoted data."""
     label = STATE_LABELS.get(rec.state, rec.state)
     detail = _trim(rec.state_note or rec.topic)
-    status = f"{label}: {detail}" if detail else label
+    status = escape(label, quote=False)
+    if detail:
+        status += f": <quoted_data>{escape(detail, quote=False)}</quoted_data>"
     if rec.archived:
         status = f"archived, {status}"
-    return f"#{rec.id} {escape(rec.name, quote=False)} · {escape(status, quote=False)} · {age_label(rec.last_active_at, now)}"
+    return f"#{rec.id} {escape(rec.name, quote=False)} · {status} · {age_label(rec.last_active_at, now)}"
 
 
 def build_working_set(reg: AgentRegistry, now: Optional[datetime] = None) -> tuple[str, set[int]]:
