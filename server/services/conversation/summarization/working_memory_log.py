@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import threading
+
+from ...tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
 from datetime import datetime
 from html import escape, unescape
 from pathlib import Path
@@ -13,8 +15,8 @@ from ....utils.timezones import now_in_user_timezone
 from .state import LogEntry, SummaryState
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
-_WORKING_MEMORY_LOG_PATH = _DATA_DIR / "conversation" / "poke_working_memory.log"
+def _working_memory_path() -> Path:
+    return scoped_data_dir(data_root()) / "conversation" / "poke_working_memory.log"
 
 
 def _encode_payload(payload: str) -> str:
@@ -241,16 +243,21 @@ class WorkingMemoryLog:
 
 
 _working_memory_log: Optional[WorkingMemoryLog] = None
+_tenant_working_memory_logs: dict[str, WorkingMemoryLog] = {}
 _factory_lock = threading.Lock()
 
 
 def get_working_memory_log() -> WorkingMemoryLog:
     global _working_memory_log
-    if _working_memory_log is None:
-        with _factory_lock:
-            if _working_memory_log is None:
-                _working_memory_log = WorkingMemoryLog(_WORKING_MEMORY_LOG_PATH)
-    return _working_memory_log
+    with _factory_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_working_memory_logs:
+                _tenant_working_memory_logs[namespace] = WorkingMemoryLog(_working_memory_path())
+            return _tenant_working_memory_logs[namespace]
+        if _working_memory_log is None:
+            _working_memory_log = WorkingMemoryLog(_working_memory_path())
+        return _working_memory_log
 
 
 __all__ = ["WorkingMemoryLog", "get_working_memory_log"]

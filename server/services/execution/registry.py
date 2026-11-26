@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
 from ...logging_config import logger
+from ..tenancy import data_root, scoped_data_dir, multi_tenant_enabled, current_namespace
 
 OPEN_EXCLUDED_STATES = ("done",)
 CASEFOLD_REF_KINDS = {"contact", "contact_name", "subject", "alias"}
@@ -469,11 +470,19 @@ class AgentRegistry:
                 raise
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_DB_PATH = _DATA_DIR / "execution_agents" / "agents.db"
-_LEGACY_ROSTER = _DATA_DIR / "execution_agents" / "roster.json"
+def _data_dir() -> Path:
+    return scoped_data_dir(data_root())
+
+
+def _db_path() -> Path:
+    return _data_dir() / "execution_agents" / "agents.db"
+
+
+def _legacy_roster() -> Path:
+    return _data_dir() / "execution_agents" / "roster.json"
 
 _registry: Optional[AgentRegistry] = None
+_tenant_registries: dict[str, AgentRegistry] = {}
 _registry_lock = threading.Lock()
 # Per-task override (evals run many isolated scenarios concurrently in one process).
 _registry_override: ContextVar[Optional[AgentRegistry]] = ContextVar("openpoke_registry_override", default=None)
@@ -485,8 +494,13 @@ def get_agent_registry() -> AgentRegistry:
     if override is not None:
         return override
     with _registry_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_registries:
+                _tenant_registries[namespace] = AgentRegistry(_db_path(), legacy_roster_path=_legacy_roster())
+            return _tenant_registries[namespace]
         if _registry is None:
-            _registry = AgentRegistry(_DB_PATH, legacy_roster_path=_LEGACY_ROSTER)
+            _registry = AgentRegistry(_db_path(), legacy_roster_path=_legacy_roster())
         return _registry
 
 

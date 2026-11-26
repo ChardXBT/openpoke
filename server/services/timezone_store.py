@@ -9,6 +9,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..logging_config import logger
+from .tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
 
 
 class TimezoneStore:
@@ -65,14 +66,25 @@ class TimezoneStore:
         return candidate
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_TIMEZONE_PATH = _DATA_DIR / "timezone.txt"
+def _timezone_path() -> Path:
+    return scoped_data_dir(data_root()) / "timezone.txt"
 
-_timezone_store = TimezoneStore(_TIMEZONE_PATH)
+_timezone_store = None
+_tenant_timezone_stores = {}
+_timezone_lock = threading.Lock()
 
 
 def get_timezone_store() -> TimezoneStore:
-    return _timezone_store
+    global _timezone_store
+    with _timezone_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_timezone_stores:
+                _tenant_timezone_stores[namespace] = TimezoneStore(_timezone_path())
+            return _tenant_timezone_stores[namespace]
+        if _timezone_store is None:
+            _timezone_store = TimezoneStore(_timezone_path())
+        return _timezone_store
 
 
 __all__ = ["TimezoneStore", "get_timezone_store"]

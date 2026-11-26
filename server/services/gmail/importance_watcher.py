@@ -14,6 +14,7 @@ from .seen_store import GmailSeenStore
 from .importance_classifier import classify_email_importance
 from ...logging_config import logger
 from ...utils.timezones import convert_to_user_timezone
+from ..tenancy import data_root, scoped_data_dir
 
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -50,8 +51,8 @@ DEFAULT_MAX_RESULTS = 50
 DEFAULT_SEEN_LIMIT = 300
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_DEFAULT_SEEN_PATH = _DATA_DIR / "gmail_seen.json"
+def _default_seen_path() -> Path:
+    return scoped_data_dir(data_root()) / "gmail_seen.json"
 
 
 class ImportantEmailWatcher:
@@ -69,7 +70,7 @@ class ImportantEmailWatcher:
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task[None]] = None
         self._running = False
-        self._seen_store = seen_store or GmailSeenStore(_DEFAULT_SEEN_PATH, DEFAULT_SEEN_LIMIT)
+        self._seen_store = seen_store or GmailSeenStore(_default_seen_path(), DEFAULT_SEEN_LIMIT)
         self._cleaner = EmailTextCleaner(max_url_length=60)
         self._has_seeded_initial_snapshot = False
         self._last_poll_timestamp: Optional[datetime] = None
