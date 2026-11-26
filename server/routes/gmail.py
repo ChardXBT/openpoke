@@ -40,6 +40,8 @@ async def gmail_pubsub_push(
     token: Optional[str] = Query(default=None),
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    if not settings.gmail_push_topic:
+        raise HTTPException(status_code=503, detail="OPENPOKE_GMAIL_PUBSUB_TOPIC is not configured")
     expected = settings.gmail_push_shared_secret
     if expected and not hmac.compare_digest(token or "", expected):
         raise HTTPException(status_code=401, detail="Invalid push token")

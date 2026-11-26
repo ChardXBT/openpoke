@@ -386,3 +386,113 @@ def test_push_endpoint_enforces_optional_shared_secret(tmp_path, monkeypatch):
     finally:
         monkeypatch.setattr(push_mod, "_service", None)
         app.dependency_overrides.clear()
+
+
+def test_watch_renewal_preserves_existing_history_cursor(tmp_path):
+    gateway = FakeGateway()
+    service, _, _ = make_service(tmp_path, gateway)
+    service.store.set_history(10, ME)
+    gateway.watch_response = {"historyId": "100", "expiration": "1893456000000"}
+    result = service.register_or_renew_watch("projects/p/topics/openpoke-gmail", now_ms=1000)
+    assert result["action"] == "registered"
+    assert service.store.last_history_id == 10
+
+
+def test_transient_registry_failure_is_retried_instead_of_consuming_reply(tmp_path):
+    class FlakyRegistry:
+        def __init__(self):
+            self.calls = 0
+        def owners(self, kind, value):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("registry temporarily unavailable")
+            return [object()]
+
+    registry = FlakyRegistry()
+    gateway = FakeGateway()
+    gateway.messages["m1"] = api_message()
+    service, _, dispatched = make_service(tmp_path, gateway, registry=registry)
+    service.store.set_history(10, ME)
+    gateway.pages = [{"history": [added("m1", "thr_1", history_id=20)], "historyId": "20"}]
+    with pytest.raises(TimeoutError):
+        asyncio.run(service.handle_pubsub(envelope(20)))
+    assert service.store.last_history_id == 10
+    assert "m1" not in service.store.processed_ids
+    assert dispatched == []
+
+    gateway.pages = [{"history": [added("m1", "thr_1", history_id=20)], "historyId": "20"}]
+    result = asyncio.run(service.handle_pubsub(envelope(20)))
+    assert result["status"] == "processed"
+    assert len(dispatched) == 1
+
+
+def test_push_endpoint_is_unavailable_when_push_is_not_configured(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import server.services.gmail.push as push_mod
+
+    service, _, _ = make_service(tmp_path)
+    monkeypatch.setattr(push_mod, "_service", service)
+    from server.app import app
+    override_route_settings(app, gmail_push_topic=None, gmail_push_shared_secret=None)
+    try:
+        client = TestClient(app)
+        response = client.post("/api/v1/gmail/push", json=envelope(20))
+        assert response.status_code == 503
+    finally:
+        monkeypatch.setattr(push_mod, "_service", None)
+        app.dependency_overrides.clear()
+
+
+def test_deleted_owned_message_is_skipped_without_blocking_later_replies(tmp_path):
+    reg = owned_registry(tmp_path)
+    gateway = FakeGateway()
+    gateway.messages["m2"] = api_message("m2", "thr_1", subject="Re: later")
+    gateway.message_errors["m1"] = GmailApiError("message deleted", status_code=404)
+    gateway.pages = [{"history": [
+        added("m1", "thr_1", history_id=18),
+        added("m2", "thr_1", history_id=19),
+    ], "historyId": "20"}]
+    service, _, dispatched = make_service(tmp_path, gateway, registry=reg)
+    service.store.set_history(10, ME)
+    result = asyncio.run(service.handle_pubsub(envelope(20)))
+    assert result["status"] == "processed"
+    assert [email.id for _, email in dispatched] == ["m2"]
+    assert {"m1", "m2"} <= service.store.processed_ids
+    assert service.store.last_history_id == 20
+
+
+def test_watch_renewal_registers_changed_topic_instead_of_reusing_old_watch(tmp_path):
+    gateway = FakeGateway()
+    service, _, _ = make_service(tmp_path, gateway)
+    service.store.set_history(10, ME)
+    service.store.update_watch(10, 1893456000000, "projects/p/topics/old-topic", ME)
+    result = service.register_or_renew_watch("projects/p/topics/new-topic", now_ms=1000)
+    assert result["action"] == "renewed"
+    assert gateway.watch_calls[-1] == ("projects/p/topics/new-topic", ["INBOX"])
+    assert service.store.last_history_id == 10
+
+
+def test_composio_gateway_discovers_connected_account_from_items_response(monkeypatch):
+    from server.services.gmail.push import ComposioGmailProxyGateway
+    import server.services.gmail.client as client_mod
+
+    class Account:
+        id = "conn-real"
+    class ConnectedAccounts:
+        def list(self, **kwargs):
+            class Response:
+                items = [Account()]
+            return Response()
+    class Tools:
+        def proxy(self, **kwargs):
+            class Response:
+                def model_dump(self):
+                    return {"status": 200, "data": {"emailAddress": ME}}
+            return Response()
+    class FakeComposio:
+        connected_accounts = ConnectedAccounts()
+        tools = Tools()
+    monkeypatch.setattr(client_mod, "_get_composio_client", lambda: FakeComposio())
+
+    gateway = ComposioGmailProxyGateway("user-1")
+    assert gateway._connected_account_id() == "conn-real"

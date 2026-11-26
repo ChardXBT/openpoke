@@ -100,6 +100,11 @@ class PushStateStore:
             return None
 
     @property
+    def watch_topic(self) -> Optional[str]:
+        value = self._state.get("watch_topic")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    @property
     def processed_ids(self) -> set[str]:
         values = self._state.get("processed_message_ids")
         return {str(v) for v in values} if isinstance(values, list) else set()
@@ -114,7 +119,15 @@ class PushStateStore:
             self._state["email_address"] = email
             self._write()
 
-    def update_watch(self, history_id: int, expiration_ms: int, topic_name: str, email_address: str) -> None:
+    def update_watch(
+        self,
+        history_id: int,
+        expiration_ms: int,
+        topic_name: str,
+        email_address: str,
+        *,
+        preserve_existing_history: bool = False,
+    ) -> None:
         number = parse_history_id(history_id)
         expiration = _parse_epoch_ms(expiration_ms)
         if not topic_name.strip():
@@ -123,12 +136,17 @@ class PushStateStore:
         if not email:
             raise ValueError("email address is required")
         with self._lock:
-            self._state.update({
-                "history_id": str(number),
+            updates = {
                 "watch_expiration_ms": str(expiration),
                 "watch_topic": topic_name,
                 "email_address": email,
-            })
+            }
+            # When renewing, the response is the mailbox's current id, not a cursor whose
+            # intervening messages have been consumed. Keep the existing cursor so the next
+            # notification lists those messages; only seed it when there is no usable cursor yet.
+            if not preserve_existing_history or self.last_history_id is None:
+                updates["history_id"] = str(number)
+            self._state.update(updates)
             self._write()
 
     def mark_processed(self, message_ids: list[str] | set[str] | tuple[str, ...]) -> None:
@@ -239,21 +257,15 @@ class GmailPushService:
     def _registry_obj(self):
         if self._registry is not None:
             return self._registry() if callable(self._registry) else self._registry
-        try:
-            from ..execution.registry import get_agent_registry
+        from ..execution.registry import get_agent_registry
 
-            return get_agent_registry()
-        except Exception:
-            return None
+        return get_agent_registry()
 
     def _thread_owned(self, thread_id: str) -> bool:
         registry = self._registry_obj()
         if registry is None or not thread_id:
             return False
-        try:
-            return bool(registry.owners("thread", thread_id))
-        except Exception:
-            return False
+        return bool(registry.owners("thread", thread_id))
 
     def _profile_email(self) -> Optional[str]:
         if not hasattr(self.gateway, "get_profile"):
@@ -360,7 +372,13 @@ class GmailPushService:
                     # remains responsible for classifying unrelated inbox mail.
                     self.store.mark_processed([message_id])
                     continue
-                raw = await asyncio.to_thread(self.gateway.get_message, message_id)
+                try:
+                    raw = await asyncio.to_thread(self.gateway.get_message, message_id)
+                except GmailApiError as exc:
+                    if exc.status_code != 404:
+                        raise
+                    self.store.mark_processed([message_id])
+                    continue
                 email = build_processed_email(normalize_api_message(raw), query="gmail-push")
                 if email is None:
                     self.store.mark_processed([message_id])
@@ -396,7 +414,11 @@ class GmailPushService:
             raise ValueError("topic name is required")
         now = int(now_ms if now_ms is not None else datetime.now(timezone.utc).timestamp() * 1000)
         current_expiration = self.store.watch_expiration_ms
-        current = current_expiration is not None and current_expiration - now > renew_before_ms
+        current = (
+            current_expiration is not None
+            and current_expiration - now > renew_before_ms
+            and self.store.watch_topic == topic
+        )
         if current:
             return {"action": "current", "expiration_ms": current_expiration}
 
@@ -416,7 +438,7 @@ class GmailPushService:
         expiration = _parse_epoch_ms(response.get("expiration"))
         if expiration <= now:
             raise ValueError("Gmail watch expiration is already in the past")
-        self.store.update_watch(history_id, expiration, topic, email)
+        self.store.update_watch(history_id, expiration, topic, email, preserve_existing_history=True)
         return {
             "action": "renewed" if current_expiration is not None else "registered",
             "history_id": history_id,
@@ -445,6 +467,10 @@ class ComposioGmailProxyGateway:
             data = getattr(items, "data", None)
             if data is None and isinstance(items, dict):
                 data = items.get("data")
+            if data is None and isinstance(items, dict):
+                data = items.get("items")
+            if data is None and not isinstance(items, dict):
+                data = getattr(items, "items", None)
             if data:
                 first = data[0]
                 self.connected_account_id = getattr(first, "id", None) or (first.get("id") if isinstance(first, dict) else None)
