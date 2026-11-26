@@ -94,10 +94,10 @@ curl -s -H "Authorization: Bearer $TOKEN" -X POST localhost:8001/api/v1/demo/ema
   API routes read it server-side and forward it, so browsers never receive it. The API still listens
   on `127.0.0.1` by default and accepts browser calls only from the web app's own origin.
 - **Phone access goes through a private tunnel, not a bare port.** Keep the Python API on localhost.
-  Expose only the Next.js app (`localhost:3000`) with Tailscale Serve/Funnel limited to your tailnet,
-  or with Cloudflare Tunnel protected by Cloudflare Access. Do not use an unauthenticated public
-  tunnel: the web proxy is allowed to use the owner token. The panel moves below the chat on narrow
-  screens instead of disappearing.
+  Expose only the Next.js app (`localhost:3000`) with Tailscale Serve limited to your tailnet, or
+  with Cloudflare Tunnel protected by Cloudflare Access. Do not use Tailscale Funnel or any other
+  unauthenticated public tunnel: the web proxy is allowed to use the owner token. The panel moves
+  below the chat on narrow screens instead of disappearing.
 - **Irreversible steps ask first when they're ambiguous.** If "send it" could mean two drafts,
   Poke asks which one instead of guessing.
 
