@@ -367,6 +367,37 @@ def test_corrupt_tenant_registry_fails_closed(tmp_path):
         tenant_context("alice").__enter__()
 
 
+def test_valid_json_registry_with_malformed_namespace_fails_closed(tmp_path):
+    enable(tmp_path)
+    registry = tmp_path / "tenants" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text('{"active":{"alice":"../escape"},"retired":{}}', encoding="utf-8")
+    with pytest.raises(TenantError):
+        tenant_context("alice").__enter__()
+
+
+def test_valid_json_registry_with_malformed_tenant_key_fails_closed(tmp_path):
+    enable(tmp_path)
+    registry = tmp_path / "tenants" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text('{"active":{"bad\\u0000tenant":"0123456789abcdef0123456789abcdef"},"retired":{}}', encoding="utf-8")
+    with pytest.raises(TenantError):
+        provision_tenant("alice")
+
+
+def test_registry_active_retired_overlap_fails_closed(tmp_path):
+    enable(tmp_path)
+    registry = tmp_path / "tenants" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    namespace = "0123456789abcdef0123456789abcdef"
+    registry.write_text(
+        '{"active":{"alice":"' + namespace + '"},"retired":{"alice":"' + namespace + '"}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(TenantError):
+        provision_tenant("alice")
+
+
 def test_concurrent_provisioning_of_same_tenant_returns_one_namespace(tmp_path):
     enable(tmp_path)
     results = []

@@ -108,6 +108,16 @@ def _load(root: Optional[Path] = None) -> dict:
         raise TenantError("tenant registry is unreadable; refusing storage access") from exc
     if not isinstance(data, dict) or not isinstance(data.get("active"), dict) or not isinstance(data.get("retired"), dict):
         raise TenantError("tenant registry is corrupt; refusing storage access")
+    for section in ("active", "retired"):
+        for public, namespace in data[section].items():
+            try:
+                validate_tenant_id(public)
+            except TenantError as exc:
+                raise TenantError("tenant registry is corrupt; refusing storage access") from exc
+            if not isinstance(namespace, str) or not _NAMESPACE.fullmatch(namespace):
+                raise TenantError("tenant registry is corrupt; refusing storage access")
+    if set(data["active"]) & set(data["retired"]):
+        raise TenantError("tenant registry is corrupt; refusing storage access")
     return data
 
 
