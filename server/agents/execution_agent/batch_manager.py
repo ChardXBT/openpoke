@@ -65,17 +65,20 @@ class _BatchState:
     created_at: datetime = field(default_factory=datetime.now)
     pending: int = 0
     results: List[ExecutionResult] = field(default_factory=list)
+    flush_generation: int = 0
+    flush_task: Optional[asyncio.Task[None]] = None
 
 
 class ExecutionBatchManager:
     """Run execution agents and deliver their combined outcome."""
 
     # Initialize batch manager with timeout and coordination state for execution agents
-    def __init__(self, timeout_seconds: int = 90) -> None:
+    def __init__(self, timeout_seconds: int = 90, coalesce_seconds: float = 1.0) -> None:
         self.timeout_seconds = timeout_seconds
+        self.coalesce_seconds = max(0.0, float(coalesce_seconds))
         self._pending: Dict[str, PendingExecution] = {}
         self._batch_lock = asyncio.Lock()
-        self._batch_state: Optional[_BatchState] = None
+        self._batch_states: Dict[str, _BatchState] = {}
 
     # Run execution agent with timeout handling and batch coordination for interaction agent
     async def execute_agent(
@@ -83,13 +86,14 @@ class ExecutionBatchManager:
         agent_name: str,
         instructions: str,
         request_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
     ) -> ExecutionResult:
         """Execute an agent asynchronously and buffer the result for batch dispatch."""
 
         if not request_id:
             request_id = str(uuid.uuid4())
 
-        batch_id = await self._register_pending_execution(agent_name, instructions, request_id)
+        batch_id = await self._register_pending_execution(agent_name, instructions, request_id, batch_id)
 
         try:
             agent_lock = _get_agent_lock(agent_name)
@@ -136,25 +140,26 @@ class ExecutionBatchManager:
         agent_name: str,
         instructions: str,
         request_id: str,
+        batch_id: Optional[str],
     ) -> str:
-        """Attach a new execution to the active batch, opening one when required."""
+        """Attach a new execution to its turn's batch, opening one when required."""
 
+        batch_key = batch_id or f"single:{request_id}"
         async with self._batch_lock:
-            if self._batch_state is None:
-                batch_id = str(uuid.uuid4())
-                self._batch_state = _BatchState(batch_id=batch_id)
-            else:
-                batch_id = self._batch_state.batch_id
+            state = self._batch_states.get(batch_key)
+            if state is None:
+                state = _BatchState(batch_id=batch_key)
+                self._batch_states[batch_key] = state
 
-            self._batch_state.pending += 1
+            state.pending += 1
             self._pending[request_id] = PendingExecution(
                 request_id=request_id,
                 agent_name=agent_name,
                 instructions=instructions,
-                batch_id=batch_id,
+                batch_id=batch_key,
             )
 
-            return batch_id
+            return batch_key
 
     # Store execution result and send combined batch to interaction agent when complete
     async def _complete_execution(
@@ -165,25 +170,44 @@ class ExecutionBatchManager:
     ) -> None:
         """Record the execution result and dispatch when the batch drains."""
 
-        dispatch_payload: Optional[str] = None
-
         async with self._batch_lock:
-            state = self._batch_state
-            if state is None or state.batch_id != batch_id:
+            state = self._batch_states.get(batch_id)
+            if state is None:
                 logger.warning(f"[{agent_name}] Dropping result for unknown batch")
                 return
 
             state.results.append(result)
             state.pending -= 1
+            state.flush_generation += 1
+            generation = state.flush_generation
+            state.flush_task = asyncio.create_task(
+                self._flush_batch_after_delay(batch_id, generation),
+                name=f"execution-batch-flush-{batch_id}",
+            )
 
-            if state.pending == 0:
-                dispatch_payload = self._format_batch_payload(state.results)
-                agent_names = [entry.agent_name for entry in state.results]
-                logger.info(f"Execution batch completed: {', '.join(agent_names)}")
-                self._batch_state = None
+    async def _flush_batch_after_delay(self, batch_id: str, generation: int) -> None:
+        """Flush after a short quiet window, without waiting for still-running agents."""
+        try:
+            await asyncio.sleep(self.coalesce_seconds)
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            raise
 
-        if dispatch_payload:
-            await self._dispatch_to_interaction_agent(dispatch_payload)
+        dispatch_payload: Optional[str] = None
+        async with self._batch_lock:
+            state = self._batch_states.get(batch_id)
+            if state is None or generation != state.flush_generation or not state.results:
+                return
+
+            results = list(state.results)
+            state.results.clear()
+            state.flush_task = None
+            if state.pending <= 0:
+                self._batch_states.pop(batch_id, None)
+            dispatch_payload = self._format_batch_payload(results)
+            agent_names = [entry.agent_name for entry in results]
+            logger.info(f"Execution batch dispatching: {', '.join(agent_names)}")
+
+        await self._dispatch_to_interaction_agent(dispatch_payload)
 
     # Return list of currently pending execution requests for monitoring purposes
     def get_pending_executions(self) -> List[Dict[str, str]]:
@@ -202,11 +226,18 @@ class ExecutionBatchManager:
 
     # Clean up all pending executions and batch state on shutdown
     async def shutdown(self) -> None:
-        """Clear pending bookkeeping (no background work remains)."""
+        """Clear pending bookkeeping and scheduled result flushes."""
 
         self._pending.clear()
+        flush_tasks: List[asyncio.Task[None]] = []
         async with self._batch_lock:
-            self._batch_state = None
+            for state in self._batch_states.values():
+                if state.flush_task is not None:
+                    state.flush_task.cancel()
+                    flush_tasks.append(state.flush_task)
+            self._batch_states.clear()
+        if flush_tasks:
+            await asyncio.gather(*flush_tasks, return_exceptions=True)
 
     # Format multiple execution results into single message for interaction agent
     def _format_batch_payload(self, results: List[ExecutionResult]) -> str:

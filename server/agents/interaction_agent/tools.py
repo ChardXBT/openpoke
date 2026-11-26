@@ -216,9 +216,12 @@ def _reference_mode() -> bool:
 
 # ------------------------------------------------------------------ dispatch
 def _default_dispatch(agent_name: str, instructions: str) -> None:
+    turn = current_turn.get()
+    batch_id = turn.turn_id if turn is not None else None
+
     async def _execute_async() -> None:
         try:
-            result = await _EXECUTION_BATCH_MANAGER.execute_agent(agent_name, instructions)
+            result = await _EXECUTION_BATCH_MANAGER.execute_agent(agent_name, instructions, batch_id=batch_id)
             status = "SUCCESS" if result.success else "FAILED"
             logger.info(f"Agent '{agent_name}' completed: {status}")
         except Exception as exc:  # pragma: no cover - defensive
