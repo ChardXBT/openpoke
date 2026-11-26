@@ -1,7 +1,7 @@
 # Clean-machine verification of `agent-overload`
 
 Date: 2026-11-20. Branch verified: `agent-overload` @ `4a351e5` (PR #1).
-_Historical record of that commit. The suite has grown since; on 2026-11-26 `main` ran **267 passed, 1 skipped** offline with `python -m pytest -o addopts=`. The count changes as tests are added, so use that command for the current exact count. The setup steps still apply._
+_Historical record of that commit. The suite has grown since; on 2026-11-26 `main` ran **267 passed, 1 skipped** offline with `python -m pytest` (the default pytest options exclude live tests). The count changes as tests are added, so use that command for the current exact count. The setup steps still apply._
 Machine: fresh Linux (Ubuntu 24.04, kernel 6.1, 4 vCPU), Python 3.12.3, Node 22.23.5, npm 10.9.9.
 No API keys or tokens in the environment; `.env` was copied from `.env.example` with
 its placeholder values only. No LLM or paid API was called; nothing was spent.
