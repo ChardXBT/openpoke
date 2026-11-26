@@ -57,8 +57,32 @@ def test_anthropic_style_cache_usage_is_parsed(tmp_path):
 
     client = LLMClient("m", Budget(1.0, tmp_path / "l.json"), pricing=_Pricing(), transport=transport)
     res = asyncio.run(client.complete("s", [], []))
-    assert (res.prompt_tokens, res.completion_tokens, res.cached_prompt_tokens, res.cache_creation_tokens) == (100, 5, 75, 25)
+    assert (res.prompt_tokens, res.completion_tokens, res.cached_prompt_tokens, res.cache_creation_tokens) == (200, 5, 75, 25)
 
 
 def test_summarize_empty_and_missing_cache_fields():
     assert summarize([])["cache_hit_rate"] == 0.0
+
+
+def test_malformed_cache_usage_shapes_fall_back_to_zero(tmp_path):
+    async def transport(url, headers, payload):
+        return 200, {"choices": [{"message": {"content": "ok"}}], "usage": {
+            "prompt_tokens": 100, "completion_tokens": 5,
+            "prompt_tokens_details": [], "cached_prompt_tokens": "bad", "cache_creation_tokens": None,
+        }}
+
+    client = LLMClient("m", Budget(1.0, tmp_path / "l.json"), pricing=_Pricing(), transport=transport)
+    res = asyncio.run(client.complete("s", [], []))
+    assert (res.cached_prompt_tokens, res.cache_creation_tokens) == (0, 0)
+
+
+def test_anthropic_prompt_total_includes_cached_and_created_tokens(tmp_path):
+    async def transport(url, headers, payload):
+        return 200, {"choices": [{"message": {"content": "ok"}}], "usage": {
+            "input_tokens": 100, "output_tokens": 5,
+            "cache_read_input_tokens": 75, "cache_creation_input_tokens": 25,
+        }}
+
+    client = LLMClient("m", Budget(1.0, tmp_path / "l.json"), pricing=_Pricing(), transport=transport)
+    res = asyncio.run(client.complete("s", [], []))
+    assert res.prompt_tokens == 200
