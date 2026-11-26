@@ -15,6 +15,7 @@ from ...config import get_settings
 from ...logging_config import logger
 from ...services.execution import loops
 from ...services.execution.registry import get_agent_registry
+from ...services.tenancy import current_namespace, multi_tenant_enabled
 
 
 _agent_locks: dict[
@@ -24,12 +25,21 @@ _agent_locks: dict[
 _agent_locks_guard = threading.Lock()
 
 
+def _batch_tenant_key() -> str:
+    return current_namespace() if multi_tenant_enabled() else "single"
+
+
+def _scoped_batch_key(tenant_key: str, batch_id: str) -> str:
+    return batch_id if tenant_key == "single" else tenant_key + "\0" + batch_id
+
+
 def _get_agent_lock(agent_name: str) -> asyncio.Lock:
-    """Return the shared lock for an agent in the current event loop."""
+    """Return the shared lock for an agent in the current event loop and tenant."""
 
     loop = asyncio.get_running_loop()
+    lock_name = f"{_batch_tenant_key()}\0{agent_name}"
     with _agent_locks_guard:
-        locks_by_loop = _agent_locks.setdefault(agent_name, weakref.WeakKeyDictionary())
+        locks_by_loop = _agent_locks.setdefault(lock_name, weakref.WeakKeyDictionary())
         lock = locks_by_loop.get(loop)
         if lock is None:
             lock = asyncio.Lock()
@@ -76,7 +86,7 @@ class ExecutionBatchManager:
     def __init__(self, timeout_seconds: int = 90, coalesce_seconds: float = 1.0) -> None:
         self.timeout_seconds = timeout_seconds
         self.coalesce_seconds = max(0.0, float(coalesce_seconds))
-        self._pending: Dict[str, PendingExecution] = {}
+        self._pending: Dict[tuple[str, str], PendingExecution] = {}
         self._batch_lock = asyncio.Lock()
         self._batch_states: Dict[str, _BatchState] = {}
 
@@ -93,7 +103,8 @@ class ExecutionBatchManager:
         if not request_id:
             request_id = str(uuid.uuid4())
 
-        batch_id = await self._register_pending_execution(agent_name, instructions, request_id, batch_id)
+        tenant_key = _batch_tenant_key()
+        batch_id = await self._register_pending_execution(agent_name, instructions, request_id, batch_id, tenant_key)
 
         try:
             agent_lock = _get_agent_lock(agent_name)
@@ -126,7 +137,7 @@ class ExecutionBatchManager:
                         error=str(exc),
                     )
         finally:
-            self._pending.pop(request_id, None)
+            self._pending.pop((tenant_key, request_id), None)
 
         if not result.success:
             _abandon_if_running(agent_name)
@@ -141,10 +152,12 @@ class ExecutionBatchManager:
         instructions: str,
         request_id: str,
         batch_id: Optional[str],
+        tenant_key: Optional[str] = None,
     ) -> str:
         """Attach a new execution to its turn's batch, opening one when required."""
 
-        batch_key = batch_id or f"single:{request_id}"
+        tenant_key = tenant_key or _batch_tenant_key()
+        batch_key = _scoped_batch_key(tenant_key, batch_id or f"single:{request_id}")
         async with self._batch_lock:
             state = self._batch_states.get(batch_key)
             if state is None:
@@ -152,7 +165,7 @@ class ExecutionBatchManager:
                 self._batch_states[batch_key] = state
 
             state.pending += 1
-            self._pending[request_id] = PendingExecution(
+            self._pending[(tenant_key, request_id)] = PendingExecution(
                 request_id=request_id,
                 agent_name=agent_name,
                 instructions=instructions,

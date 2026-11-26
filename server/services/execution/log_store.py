@@ -10,10 +10,11 @@ from typing import Dict, Iterator, List, Optional, Tuple
 
 from ...logging_config import logger
 from ...utils.timezones import now_in_user_timezone
+from ..tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_EXECUTION_LOG_DIR = _DATA_DIR / "execution_agents"
+def _execution_log_dir() -> Path:
+    return scoped_data_dir(data_root()) / "execution_agents"
 
 
 def _slugify(name: str) -> str:
@@ -176,9 +177,20 @@ class ExecutionAgentLogStore:
             logger.error(f"Failed to clear execution logs: {exc}")
 
 
-_execution_agent_logs = ExecutionAgentLogStore(_EXECUTION_LOG_DIR)
+_execution_agent_logs = None
+_tenant_log_stores: dict[str, ExecutionAgentLogStore] = {}
+_log_store_lock = threading.Lock()
 
 
 def get_execution_agent_logs() -> ExecutionAgentLogStore:
-    """Get the singleton log store instance."""
-    return _execution_agent_logs
+    """Get the current tenant's log store (or the single-user store when the flag is off)."""
+    global _execution_agent_logs
+    with _log_store_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_log_stores:
+                _tenant_log_stores[namespace] = ExecutionAgentLogStore(_execution_log_dir())
+            return _tenant_log_stores[namespace]
+        if _execution_agent_logs is None:
+            _execution_agent_logs = ExecutionAgentLogStore(_execution_log_dir())
+        return _execution_agent_logs

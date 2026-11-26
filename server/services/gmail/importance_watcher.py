@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
+from ..tenancy import current_namespace, multi_tenant_enabled
 from .client import execute_gmail_tool, get_active_gmail_user_id
 from .processing import EmailTextCleaner, ProcessedEmail, parse_gmail_fetch_response
-from .seen_store import GmailSeenStore
+from .seen_store import GmailSeenStore, get_gmail_seen_store
 from .importance_classifier import classify_email_importance
 from ...logging_config import logger
 from ...utils.timezones import convert_to_user_timezone
@@ -50,10 +51,6 @@ DEFAULT_MAX_RESULTS = 50
 DEFAULT_SEEN_LIMIT = 300
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_DEFAULT_SEEN_PATH = _DATA_DIR / "gmail_seen.json"
-
-
 class ImportantEmailWatcher:
     """Poll Gmail for recent messages and surface important ones."""
 
@@ -69,7 +66,7 @@ class ImportantEmailWatcher:
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task[None]] = None
         self._running = False
-        self._seen_store = seen_store or GmailSeenStore(_DEFAULT_SEEN_PATH, DEFAULT_SEEN_LIMIT)
+        self._seen_store = seen_store or get_gmail_seen_store(DEFAULT_SEEN_LIMIT)
         self._cleaner = EmailTextCleaner(max_url_length=60)
         self._has_seeded_initial_snapshot = False
         self._last_poll_timestamp: Optional[datetime] = None
@@ -257,13 +254,21 @@ class ImportantEmailWatcher:
 
 
 _watcher_instance: Optional[ImportantEmailWatcher] = None
+_tenant_watchers: dict[str, ImportantEmailWatcher] = {}
+_watcher_lock = threading.Lock()
 
 
 def get_important_email_watcher() -> ImportantEmailWatcher:
     global _watcher_instance
-    if _watcher_instance is None:
-        _watcher_instance = ImportantEmailWatcher()
-    return _watcher_instance
+    with _watcher_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_watchers:
+                _tenant_watchers[namespace] = ImportantEmailWatcher()
+            return _tenant_watchers[namespace]
+        if _watcher_instance is None:
+            _watcher_instance = ImportantEmailWatcher()
+        return _watcher_instance
 
 
 __all__ = ["ImportantEmailWatcher", "get_important_email_watcher"]

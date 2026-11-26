@@ -13,6 +13,7 @@ from ...config import Settings, get_settings
 from ...logging_config import logger
 from ...models import GmailConnectPayload, GmailDisconnectPayload, GmailStatusPayload
 from ...utils import error_response
+from ..tenancy import TenantError, current_namespace, multi_tenant_enabled
 
 
 _CLIENT_LOCK = threading.Lock()
@@ -21,18 +22,31 @@ _CLIENT: Optional[Any] = None
 _PROFILE_CACHE: Dict[str, Dict[str, Any]] = {}
 _PROFILE_CACHE_LOCK = threading.Lock()
 _ACTIVE_USER_ID_LOCK = threading.Lock()
-_ACTIVE_USER_ID: Optional[str] = None
+_ACTIVE_USER_IDS: Dict[str, str] = {}
 
 
 def _normalized(value: Optional[str]) -> str:
     return (value or "").strip()
 
 
+def _tenant_key() -> Optional[str]:
+    if not multi_tenant_enabled():
+        return "single"
+    try:
+        return current_namespace()
+    except TenantError:
+        return None
+
 def _set_active_gmail_user_id(user_id: Optional[str]) -> None:
     sanitized = _normalized(user_id)
+    key = _tenant_key()
+    if key is None:
+        return  # fail closed: no request tenant means no account may become active
     with _ACTIVE_USER_ID_LOCK:
-        global _ACTIVE_USER_ID
-        _ACTIVE_USER_ID = sanitized or None
+        if sanitized:
+            _ACTIVE_USER_IDS[key] = sanitized
+        else:
+            _ACTIVE_USER_IDS.pop(key, None)
 
 
 def _demo_mode() -> bool:
@@ -42,8 +56,11 @@ def _demo_mode() -> bool:
 def get_active_gmail_user_id() -> Optional[str]:
     if _demo_mode():
         return "demo-user"
+    key = _tenant_key()
+    if key is None:
+        return None
     with _ACTIVE_USER_ID_LOCK:
-        return _ACTIVE_USER_ID
+        return _ACTIVE_USER_IDS.get(key)
 
 
 def _gmail_import_client():
@@ -132,7 +149,7 @@ def _cache_profile(user_id: str, profile: Dict[str, Any]) -> None:
     if not sanitized or not isinstance(profile, dict):
         return
     with _PROFILE_CACHE_LOCK:
-        _PROFILE_CACHE[sanitized] = {
+        _PROFILE_CACHE[(_tenant_key() or "none") + ":" + sanitized] = {
             "profile": profile,
             "cached_at": datetime.utcnow().isoformat(),
         }
@@ -143,7 +160,7 @@ def _get_cached_profile(user_id: Optional[str]) -> Optional[Dict[str, Any]]:
     if not sanitized:
         return None
     with _PROFILE_CACHE_LOCK:
-        payload = _PROFILE_CACHE.get(sanitized)
+        payload = _PROFILE_CACHE.get((_tenant_key() or "none") + ":" + sanitized)
         if payload and isinstance(payload.get("profile"), dict):
             return payload["profile"]
     return None
@@ -152,7 +169,7 @@ def _get_cached_profile(user_id: Optional[str]) -> Optional[Dict[str, Any]]:
 def _clear_cached_profile(user_id: Optional[str] = None) -> None:
     with _PROFILE_CACHE_LOCK:
         if user_id:
-            _PROFILE_CACHE.pop(_normalized(user_id), None)
+            _PROFILE_CACHE.pop((_tenant_key() or "none") + ":" + _normalized(user_id), None)
         else:
             _PROFILE_CACHE.clear()
 

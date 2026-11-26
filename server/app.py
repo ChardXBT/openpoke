@@ -12,6 +12,7 @@ from .config import ensure_owner_token, get_settings
 from .logging_config import configure_logging, logger
 from .routes import api_router
 from .services import get_important_email_watcher, get_trigger_scheduler
+from .services.tenancy import TenantASGIMiddleware, multi_tenant_enabled
 
 
 # Register global exception handlers for consistent error responses across the API
@@ -54,6 +55,8 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_middleware(TenantASGIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_settings.cors_allow_origins,
@@ -94,6 +97,9 @@ app.include_router(api_router)
 # Initialize background services (trigger scheduler and email watcher) when the app starts
 async def _start_trigger_scheduler() -> None:
     ensure_owner_token(get_settings())
+    if multi_tenant_enabled():
+        logger.info("multi-tenant storage enabled; global scheduler and Gmail watcher stay stopped until tenant-aware runners are configured")
+        return
     scheduler = get_trigger_scheduler()
     await scheduler.start()
     watcher = get_important_email_watcher()
@@ -103,6 +109,8 @@ async def _start_trigger_scheduler() -> None:
 @app.on_event("shutdown")
 # Gracefully shutdown background services when the app stops
 async def _stop_trigger_scheduler() -> None:
+    if multi_tenant_enabled():
+        return
     scheduler = get_trigger_scheduler()
     await scheduler.stop()
     watcher = get_important_email_watcher()
