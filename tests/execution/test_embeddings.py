@@ -84,3 +84,78 @@ def test_concurrent_cache_use_does_not_corrupt_store(tmp_path):
         thread.join()
     assert errors == []
     assert len(cached_embeddings(["same text"], lambda texts: fake_vectors(texts), tmp_path)) == 1
+
+
+def test_nonfinite_cache_blob_is_reembedded(tmp_path):
+    text = "nonfinite corrupt row"
+    cached_embeddings([text], lambda texts: fake_vectors(texts), tmp_path)
+    digest = digest_for(text)
+    with sqlite3.connect(tmp_path / "embeddings.sqlite3") as conn:
+        conn.execute("UPDATE embeddings SET vector = ? WHERE digest = ?", (sqlite3.Binary(b"\x00\x00\xc0\x7f" * 3), digest))
+    calls = []
+    vectors = cached_embeddings([text], lambda texts: calls.append(list(texts)) or fake_vectors(texts), tmp_path)
+    assert len(vectors) == 1
+    assert calls == [[text]]
+
+
+def test_partial_embedder_failure_reuses_committed_batches(tmp_path):
+    texts = [f"partial text {index}" for index in range(129)]
+    calls = []
+
+    def flaky_embedder(batch):
+        calls.append(list(batch))
+        if len(calls) == 2:
+            raise RuntimeError("provider stopped after the first batch")
+        return fake_vectors(batch)
+
+    with pytest.raises(RuntimeError, match="provider stopped"):
+        cached_embeddings(texts, flaky_embedder, tmp_path)
+    assert calls == [texts[:128], texts[128:]]
+
+    calls.clear()
+    vectors = cached_embeddings(texts, lambda batch: calls.append(list(batch)) or fake_vectors(batch), tmp_path)
+    assert len(vectors) == len(texts)
+    assert calls == [texts[128:]]
+
+
+def test_openai_embedder_sorts_out_of_order_rows_without_network(monkeypatch):
+    import httpx
+    import server.services.execution.embeddings as embeddings
+
+    requests = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [
+                {"index": 1, "embedding": [0.0, 1.0]},
+                {"index": 0, "embedding": [1.0, 0.0]},
+            ]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def post(self, url, headers, json, timeout):
+            requests.append((url, headers, json, timeout))
+            return FakeResponse()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    embeddings._CLIENT = None
+    try:
+        embedder = embeddings.openai_embedder()
+        assert embedder is not None
+        assert embedder(["first", "second"]) == [[1.0, 0.0], [0.0, 1.0]]
+    finally:
+        embeddings._CLIENT = None
+    assert requests[0][2] == {"model": embeddings.MODEL, "input": ["first", "second"]}
+
+
+def test_vectors_just_embedded_still_return_when_cache_bounds_evict_them(tmp_path):
+    store = EmbeddingStore(tmp_path, memory_entries=2, disk_entries=2)
+    vectors = cached_embeddings(["c", "a", "b"], lambda batch: fake_vectors(batch), tmp_path, store=store)
+    assert vectors == fake_vectors(["c", "a", "b"])
+    assert store.memory_size <= 2

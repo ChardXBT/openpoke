@@ -142,6 +142,25 @@ class EmbeddingStore:
             while len(self._memory) > self.memory_entries:
                 self._memory.popitem(last=False)
 
+    def _memory_delete(self, digest: str) -> None:
+        with self._memory_lock:
+            self._memory.pop(digest, None)
+
+    @staticmethod
+    def _valid_blob(blob: bytes) -> bool:
+        if not blob or len(blob) % 4:
+            return False
+        try:
+            import numpy as np
+
+            return bool(np.isfinite(np.frombuffer(blob, dtype="<f4")).all())
+        except ImportError:  # the cache helper remains usable without the optional numeric stack
+            try:
+                _unpack_vector(blob, len(blob) // 4)
+            except (struct.error, ValueError):
+                return False
+            return True
+
     def _memory_put(self, digest: str, vector: list[float]) -> None:
         self._memory_put_blob(digest, _pack_vector(vector))
 
@@ -157,9 +176,12 @@ class EmbeddingStore:
         valid: set[str] = set()
         missing_for_db: list[str] = []
         for digest in dict.fromkeys(digests):
-            if self._memory_get(digest) is not None:
+            cached = self._memory_get(digest)
+            if cached is not None and self._valid_blob(cached):
                 valid.add(digest)
             else:
+                if cached is not None:
+                    self._memory_delete(digest)
                 missing_for_db.append(digest)
         if not missing_for_db or not self.disk_entries:
             return valid
@@ -170,7 +192,7 @@ class EmbeddingStore:
             placeholders = ",".join("?" for _ in chunk)
             with self._connect() as conn:
                 rows = conn.execute(
-                    f"SELECT digest, dimensions, length(vector) FROM embeddings WHERE digest IN ({placeholders})",
+                    f"SELECT digest, dimensions, vector FROM embeddings WHERE digest IN ({placeholders})",
                     chunk,
                 ).fetchall()
                 now = time.time()
@@ -178,8 +200,9 @@ class EmbeddingStore:
                     "UPDATE embeddings SET last_accessed = ? WHERE digest = ?",
                     [(now, row[0]) for row in rows],
                 )
-            for digest, dimensions, blob_size in rows:
-                if int(dimensions) <= 0 or int(blob_size) != int(dimensions) * 4:
+            for digest, dimensions, blob in rows:
+                packed = bytes(blob)
+                if int(dimensions) <= 0 or len(packed) != int(dimensions) * 4 or not self._valid_blob(packed):
                     corrupt.append(str(digest))
                     continue
                 valid.add(str(digest))
@@ -287,6 +310,7 @@ def prepare_embeddings(
     texts: list[str],
     embedder: Embedder,
     store: EmbeddingStore,
+    produced_vectors: Optional[dict[str, list[float]]] = None,
 ) -> list[str]:
     """Ensure every unique text has a valid cached vector; return aligned digests."""
     digests = [digest_for(text) for text in texts]
@@ -313,7 +337,10 @@ def prepare_embeddings(
                 expected_dimensions = len(clean)
             elif len(clean) != expected_dimensions:
                 raise ValueError("embedder returned vectors that do not all have the same dimensions")
-            rows.append((digest_for(text), clean))
+            digest = digest_for(text)
+            rows.append((digest, clean))
+            if produced_vectors is not None:
+                produced_vectors[digest] = clean
         store.put_many(rows)
     return digests
 
@@ -328,10 +355,32 @@ def cached_embeddings(
     if not texts:
         return []
     cache = store or EmbeddingStore(directory)
-    digests = prepare_embeddings(texts, embedder, cache)
+    produced: dict[str, list[float]] = {}
+    digests = prepare_embeddings(texts, embedder, cache, produced)
     vectors: list[list[float]] = []
-    for batch in cache.vectors_for(digests):
-        vectors.extend(batch)
+    try:
+        for batch in cache.vectors_for(digests):
+            vectors.extend(batch)
+    except KeyError:
+        # Tiny owner-configured memory/disk bounds can evict a vector before the
+        # current caller reads it back. Correctness must not depend on cache capacity:
+        # fall back to the vectors just embedded, or re-embed a present row displaced
+        # by a later batch, without weakening the cache bounds.
+        vectors = []
+        text_by_digest = {}
+        for text, digest in zip(texts, digests):
+            text_by_digest.setdefault(digest, text)
+        for digest in digests:
+            try:
+                vector = next(cache.vectors_for([digest], batch_size=1))[0]
+            except KeyError:
+                vector = produced.get(digest)
+                if vector is None:
+                    embedded = embedder([text_by_digest[digest]])
+                    if len(embedded) != 1:
+                        raise ValueError("embedder returned the wrong number of vectors")
+                    vector = _clean_vector(embedded[0])
+            vectors.append(vector)
     if len(vectors) != len(texts):
         raise RuntimeError("embedding cache did not produce every requested vector")
     dimensions = len(vectors[0])
