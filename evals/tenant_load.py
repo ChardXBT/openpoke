@@ -4,12 +4,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from server.services.execution.registry import AgentRegistry
+from server.services.gmail.seen_store import GmailSeenStore
 from server.services.profile.store import ProfileStore
 from server.services.tenancy import provision_tenant, scoped_data_dir, tenant_context
 from server.services.triggers.store import TriggerStore
@@ -22,6 +28,7 @@ def _work(root: Path, tenant: str, operations: int) -> dict:
         profile = ProfileStore(base / "profile.db")
         registry = AgentRegistry(base / "agents.db")
         triggers = TriggerStore(base / "triggers.db")
+        seen = GmailSeenStore(base / "gmail_seen.json", max_entries=max(1, operations))
         agent, _ = registry.get_or_create(f"load-{tenant}")
         for index in range(operations):
             profile.remember("fact", f"fact-{index}", f"{tenant}-memory-{index}")
@@ -38,17 +45,23 @@ def _work(root: Path, tenant: str, operations: int) -> dict:
                 "created_at": "2026-01-01T00:00:00Z",
                 "updated_at": "2026-01-01T00:00:00Z",
             })
+            seen.mark_seen([f"{tenant}-mail-{index}"])
         facts = [f.value for f in profile.current()]
         contacts = [r.name for r in registry.owners("contact", f"{tenant}-0@example.test")]
         rows = triggers.list_for_agent(agent.name)
+        mail = seen.snapshot()
     return {
         "tenant": tenant,
-        "operations": operations * 3,
+        "operations": operations * 4,
         "seconds": time.perf_counter() - started,
         "facts": len(facts),
         "contacts": len(contacts),
         "triggers": len(rows),
-        "foreign_bytes": sum(1 for value in facts if not value.startswith(tenant + "-memory-")),
+        "mail": len(mail),
+        "foreign_bytes": (
+            sum(1 for value in facts if not value.startswith(tenant + "-memory-"))
+            + sum(1 for value in mail if not value.startswith(tenant + "-mail-"))
+        ),
     }
 
 
@@ -65,7 +78,11 @@ def run(root: Path, tenants: int, operations: int, workers: int) -> dict:
     elapsed = time.perf_counter() - started
     total_ops = sum(r["operations"] for r in results)
     mismatches = sum(r["foreign_bytes"] for r in results)
-    incomplete = [r["tenant"] for r in results if r["facts"] != operations or r["contacts"] != 1 or r["triggers"] != operations]
+    incomplete = [
+        r["tenant"]
+        for r in results
+        if r["facts"] != operations or r["contacts"] != 1 or r["triggers"] != operations or r["mail"] != operations
+    ]
     return {
         "schema": 1,
         "tenants": tenants,

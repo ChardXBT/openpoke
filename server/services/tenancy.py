@@ -17,9 +17,11 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Iterator, Optional
 
-_TENANT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_NAMESPACE = re.compile(r"[a-f0-9]{32}")
+MAX_TENANT_ID_LENGTH = 128
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _current_tenant: ContextVar[Optional[str]] = ContextVar("openpoke_tenant", default=None)
+_current_namespace: ContextVar[Optional[str]] = ContextVar("openpoke_tenant_namespace", default=None)
 _registry_lock = threading.RLock()
 
 
@@ -28,7 +30,7 @@ class TenantError(RuntimeError):
 
 
 def multi_tenant_enabled() -> bool:
-    return os.getenv("OPENPOKE_MULTI_TENANT", "0") == "1"
+    return (os.getenv("OPENPOKE_MULTI_TENANT") or "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def data_root() -> Path:
@@ -36,10 +38,27 @@ def data_root() -> Path:
 
 
 def validate_tenant_id(tenant_id: object) -> str:
-    text = str(tenant_id or "").strip()
-    if not _TENANT_ID.fullmatch(text):
-        raise TenantError("missing or invalid tenant id")
-    return text
+    """Validate the opaque public tenant id without using it as a path.
+
+    Separators, unicode and spaces inside the id are legal: storage uses a random
+    namespace instead. Control characters, outer whitespace, non-strings and very
+    long ids are malformed and fail closed.
+    """
+    if not isinstance(tenant_id, str):
+        raise TenantError("tenant id must be a string")
+    if not tenant_id or not tenant_id.strip():
+        raise TenantError("tenant id is required")
+    if tenant_id != tenant_id.strip():
+        raise TenantError("tenant id has leading or trailing whitespace")
+    if len(tenant_id) > MAX_TENANT_ID_LENGTH:
+        raise TenantError("tenant id is too long")
+    try:
+        tenant_id.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TenantError("tenant id is not valid UTF-8") from exc
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in tenant_id):
+        raise TenantError("tenant id contains a control character")
+    return tenant_id
 
 
 def _registry_path(root: Optional[Path] = None) -> Path:
@@ -74,7 +93,7 @@ def provision_tenant(tenant_id: object, root: Optional[Path] = None) -> str:
     with _registry_lock:
         data = _load(root)
         existing = data["active"].get(public)
-        if isinstance(existing, str) and re.fullmatch(r"[a-f0-9]{32}", existing):
+        if isinstance(existing, str) and _NAMESPACE.fullmatch(existing):
             return existing
         namespace = secrets.token_hex(16)
         data["active"][public] = namespace
@@ -108,11 +127,13 @@ def tenant_namespace(tenant_id: object, root: Optional[Path] = None) -> str:
 def tenant_context(tenant_id: object) -> Iterator[str]:
     public = validate_tenant_id(tenant_id)
     namespace = tenant_namespace(public)
-    token = _current_tenant.set(public)
+    tenant_token = _current_tenant.set(public)
+    namespace_token = _current_namespace.set(namespace)
     try:
         yield namespace
     finally:
-        _current_tenant.reset(token)
+        _current_namespace.reset(namespace_token)
+        _current_tenant.reset(tenant_token)
 
 
 def current_tenant() -> str:
@@ -123,6 +144,9 @@ def current_tenant() -> str:
 
 
 def current_namespace() -> str:
+    namespace = _current_namespace.get()
+    if namespace:
+        return namespace
     return tenant_namespace(current_tenant())
 
 
@@ -148,14 +172,16 @@ class TenantASGIMiddleware:
         headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
         tenant = headers.get("x-openpoke-tenant", "")
         try:
-            provision_tenant(tenant)
+            namespace = provision_tenant(tenant)
         except TenantError as exc:
             from fastapi.responses import JSONResponse
-            response = JSONResponse({"ok": False, "error": str(exc)}, status_code=401 if not tenant else 400)
+            response = JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
             await response(scope, receive, send)
             return
-        token = _current_tenant.set(tenant)
+        tenant_token = _current_tenant.set(tenant)
+        namespace_token = _current_namespace.set(namespace)
         try:
             await self.app(scope, receive, send)
         finally:
-            _current_tenant.reset(token)
+            _current_namespace.reset(namespace_token)
+            _current_tenant.reset(tenant_token)

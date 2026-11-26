@@ -31,16 +31,30 @@ def enable(tmp_path):
     os.environ["OPENPOKE_DATA_DIR"] = str(tmp_path)
 
 
-def test_missing_wrong_and_path_like_tenant_ids_fail_closed(tmp_path):
+def test_missing_malformed_and_unknown_tenant_ids_fail_closed(tmp_path):
     enable(tmp_path)
     provision_tenant("alice")
     with pytest.raises(TenantError):
         scoped_data_dir(tmp_path)
-    for bad in ("", "../alice", "alice/../bob", "alice bob", "x" * 65):
+    for bad in ("", " ", " padded", "padded ", "bad\x00tenant", chr(0xD800), "x" * 129, None, 17):
         with pytest.raises(TenantError):
             provision_tenant(bad)
     with pytest.raises(TenantError):
         tenant_context("bob").__enter__()
+
+
+def test_opaque_unicode_separator_and_space_ids_are_isolated(tmp_path):
+    enable(tmp_path)
+    tenants = ("tenant-alpha/../tenant-beta", "tenant-ünicode", "tenant with space")
+    for index, tenant in enumerate(tenants):
+        provision_tenant(tenant)
+        with tenant_context(tenant):
+            assert tenant not in current_namespace()
+            ProfileStore(scoped_data_dir(tmp_path) / "profile.db").remember("fact", "secret", f"secret-{index}")
+    for index, tenant in enumerate(tenants):
+        with tenant_context(tenant):
+            values = [fact.value for fact in ProfileStore(scoped_data_dir(tmp_path) / "profile.db").current()]
+            assert values == [f"secret-{index}"]
 
 
 def test_tenant_data_dirs_are_random_and_id_reuse_gets_a_fresh_namespace(tmp_path):
@@ -173,6 +187,18 @@ def test_reused_tenant_id_cannot_read_retired_memory(tmp_path):
         assert fresh.current() == []
 
 
+def test_inflight_tenant_context_keeps_one_namespace_across_retirement(tmp_path):
+    enable(tmp_path)
+    first = provision_tenant("reuse")
+    with tenant_context("reuse"):
+        assert retire_tenant("reuse")
+        assert scoped_data_dir(tmp_path) == tmp_path / "tenants" / first
+        provision_tenant("reuse")
+        assert scoped_data_dir(tmp_path) == tmp_path / "tenants" / first
+    with tenant_context("reuse") as second:
+        assert second != first
+
+
 def test_gmail_active_account_is_scoped_and_fails_closed_without_tenant(tmp_path, monkeypatch):
     enable(tmp_path)
     provision_tenant("alice")
@@ -231,9 +257,128 @@ def test_api_middleware_requires_valid_tenant_and_scopes_requests(tmp_path):
     from fastapi.testclient import TestClient
     from server.app import app
     with TestClient(app) as client:
-        assert client.get("/api/v1/meta/timezone").status_code == 401
-        assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "../bad"}).status_code == 400
+        assert client.get("/api/v1/meta/timezone").status_code == 400
+        assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "bad\x00tenant"}).status_code == 400
         assert client.post("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "alice"}, json={"timezone": "America/Toronto"}).status_code == 200
         assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "alice"}).json()["timezone"] == "America/Toronto"
         assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "bob"}).json()["timezone"] == "UTC"
         assert client.get("/api/v1/health").status_code == 200
+
+
+def test_cross_tenant_search_never_returns_foreign_agents_or_refs(tmp_path):
+    enable(tmp_path)
+    provision_tenant("alice")
+    provision_tenant("bob")
+    from server.services.execution.search import search_agents
+
+    with tenant_context("alice"):
+        registry = get_agent_registry()
+        agent, _ = registry.get_or_create("Email Alice Client", topic="alpha porcelain invoice")
+        registry.add_ref(agent.id, "contact", "alice-client@example.test")
+    with tenant_context("bob"):
+        foreign = get_agent_registry()
+        assert foreign.owners("contact", "alice-client@example.test") == []
+        assert search_agents(foreign, "alpha porcelain invoice") == []
+        assert search_agents(foreign, "alice-client@example.test") == []
+        local, _ = foreign.get_or_create("Email Alice Client", topic="beta porcelain invoice")
+        assert local.id == agent.id
+    with tenant_context("alice"):
+        hits = search_agents(get_agent_registry(), "alice-client@example.test")
+        assert [hit.agent.id for hit in hits] == [agent.id]
+
+
+def test_gmail_seen_state_is_isolated_and_bounded_per_tenant(tmp_path):
+    enable(tmp_path)
+    provision_tenant("alice")
+    provision_tenant("bob")
+    from server.services.gmail.seen_store import get_gmail_seen_store
+
+    with tenant_context("alice"):
+        alice_seen = get_gmail_seen_store(max_entries=2)
+        alice_seen.mark_seen(["", None, "alice-mail-1"])
+        alice_seen.mark_seen(["alice-mail-1", "alice-mail-2"])
+        alice_seen.mark_seen(["alice-mail-3"])
+        assert alice_seen.snapshot() == ["alice-mail-2", "alice-mail-3"]
+        assert alice_seen.is_seen("alice-mail-2")
+    with tenant_context("bob"):
+        bob_seen = get_gmail_seen_store(max_entries=2)
+        assert bob_seen.snapshot() == []
+        assert not bob_seen.is_seen("alice-mail-2")
+        bob_seen.mark_seen(["bob-mail-1"])
+    with tenant_context("alice"):
+        assert not get_gmail_seen_store(max_entries=2).is_seen("bob-mail-1")
+        assert get_gmail_seen_store(max_entries=2).is_seen("alice-mail-2")
+
+
+def test_execution_batches_and_agent_locks_are_tenant_scoped(tmp_path, monkeypatch):
+    enable(tmp_path)
+    provision_tenant("alice")
+    provision_tenant("bob")
+    from server.agents.execution_agent.batch_manager import ExecutionBatchManager, ExecutionResult, _get_agent_lock
+
+    async def run():
+        manager = ExecutionBatchManager()
+        sent = []
+
+        async def dispatch(payload):
+            sent.append(payload)
+
+        monkeypatch.setattr(manager, "_dispatch_to_interaction_agent", dispatch)
+        with tenant_context("alice"):
+            alice_batch = await manager._register_pending_execution("shared-agent", "alice work", "alice-request")
+            alice_lock = _get_agent_lock("shared-agent")
+        with tenant_context("bob"):
+            bob_batch = await manager._register_pending_execution("shared-agent", "bob work", "bob-request")
+            bob_lock = _get_agent_lock("shared-agent")
+        assert alice_batch != bob_batch
+        assert alice_lock is not bob_lock
+        with tenant_context("alice"):
+            assert _get_agent_lock("shared-agent") is alice_lock
+            await manager._complete_execution(alice_batch, ExecutionResult("shared-agent", True, "alpha done"), "shared-agent")
+        with tenant_context("bob"):
+            await manager._complete_execution(bob_batch, ExecutionResult("shared-agent", True, "beta done"), "shared-agent")
+        return sent
+
+    sent = asyncio.run(run())
+    assert sent == ["[SUCCESS] shared-agent: alpha done", "[SUCCESS] shared-agent: beta done"]
+
+
+def test_tenant_named_default_uses_a_tenant_namespace_not_legacy_files(tmp_path):
+    enable(tmp_path)
+    provision_tenant("default")
+    with tenant_context("default"):
+        get_profile_store().remember("fact", "private", "tenant default only")
+        assert (scoped_data_dir(tmp_path) / "profile.db").exists()
+    assert not (tmp_path / "profile.db").exists()
+
+
+def test_corrupt_tenant_registry_fails_closed(tmp_path):
+    enable(tmp_path)
+    provision_tenant("alice")
+    registry = tmp_path / "tenants" / "registry.json"
+    registry.write_text("not json", encoding="utf-8")
+    with pytest.raises(TenantError):
+        provision_tenant("alice")
+    with pytest.raises(TenantError):
+        tenant_context("alice").__enter__()
+
+
+def test_concurrent_provisioning_of_same_tenant_returns_one_namespace(tmp_path):
+    enable(tmp_path)
+    results = []
+    errors = []
+
+    def provision():
+        try:
+            results.append(provision_tenant("alice"))
+        except Exception as exc:  # pragma: no cover - assertion path below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=provision) for _ in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert not errors
+    assert len(results) == 12
+    assert len(set(results)) == 1
