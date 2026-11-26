@@ -1,0 +1,161 @@
+"""Tenant-scoped local storage groundwork.
+
+Disabled by default. With OPENPOKE_MULTI_TENANT=1 every tenant receives a random
+storage namespace beneath the data directory; the public tenant id is never a
+path component. Retiring and reusing an id creates a fresh namespace, so a new
+tenant cannot inherit the previous tenant's files.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import secrets
+import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
+from pathlib import Path
+from typing import Iterator, Optional
+
+_TENANT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_current_tenant: ContextVar[Optional[str]] = ContextVar("openpoke_tenant", default=None)
+_registry_lock = threading.RLock()
+
+
+class TenantError(RuntimeError):
+    pass
+
+
+def multi_tenant_enabled() -> bool:
+    return os.getenv("OPENPOKE_MULTI_TENANT", "0") == "1"
+
+
+def data_root() -> Path:
+    return Path(os.getenv("OPENPOKE_DATA_DIR") or _DEFAULT_DATA_DIR)
+
+
+def validate_tenant_id(tenant_id: object) -> str:
+    text = str(tenant_id or "").strip()
+    if not _TENANT_ID.fullmatch(text):
+        raise TenantError("missing or invalid tenant id")
+    return text
+
+
+def _registry_path(root: Optional[Path] = None) -> Path:
+    return (root or data_root()) / "tenants" / "registry.json"
+
+
+def _load(root: Optional[Path] = None) -> dict:
+    try:
+        data = json.loads(_registry_path(root).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"active": {}, "retired": {}}
+    except Exception as exc:
+        raise TenantError("tenant registry is unreadable; refusing storage access") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("active"), dict) or not isinstance(data.get("retired"), dict):
+        raise TenantError("tenant registry is corrupt; refusing storage access")
+    return data
+
+
+def _write(data: dict, root: Optional[Path] = None) -> None:
+    path = _registry_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def provision_tenant(tenant_id: object, root: Optional[Path] = None) -> str:
+    """Return the storage namespace for a tenant, creating it atomically enough
+    for local hosting. Re-provisioning an active id is stable; a retired id gets
+    a fresh namespace rather than the old data."""
+    public = validate_tenant_id(tenant_id)
+    with _registry_lock:
+        data = _load(root)
+        existing = data["active"].get(public)
+        if isinstance(existing, str) and re.fullmatch(r"[a-f0-9]{32}", existing):
+            return existing
+        namespace = secrets.token_hex(16)
+        data["active"][public] = namespace
+        data["retired"].pop(public, None)
+        _write(data, root)
+        return namespace
+
+
+def retire_tenant(tenant_id: object, root: Optional[Path] = None) -> bool:
+    public = validate_tenant_id(tenant_id)
+    with _registry_lock:
+        data = _load(root)
+        namespace = data["active"].pop(public, None)
+        if not namespace:
+            return False
+        data["retired"][public] = namespace
+        _write(data, root)
+        return True
+
+
+def tenant_namespace(tenant_id: object, root: Optional[Path] = None) -> str:
+    public = validate_tenant_id(tenant_id)
+    data = _load(root)
+    namespace = data["active"].get(public)
+    if not isinstance(namespace, str):
+        raise TenantError("unknown tenant id")
+    return namespace
+
+
+@contextmanager
+def tenant_context(tenant_id: object) -> Iterator[str]:
+    public = validate_tenant_id(tenant_id)
+    namespace = tenant_namespace(public)
+    token = _current_tenant.set(public)
+    try:
+        yield namespace
+    finally:
+        _current_tenant.reset(token)
+
+
+def current_tenant() -> str:
+    tenant = _current_tenant.get()
+    if not tenant:
+        raise TenantError("tenant id is required in multi-tenant mode")
+    return tenant
+
+
+def current_namespace() -> str:
+    return tenant_namespace(current_tenant())
+
+
+def scoped_data_dir(base: Path) -> Path:
+    if not multi_tenant_enabled():
+        return base
+    return base / "tenants" / current_namespace()
+
+
+class TenantASGIMiddleware:
+    """Require and scope X-Openpoke-Tenant when multi-tenant mode is enabled."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or not multi_tenant_enabled():
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if path.endswith("/health"):
+            await self.app(scope, receive, send)
+            return
+        headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
+        tenant = headers.get("x-openpoke-tenant", "")
+        try:
+            provision_tenant(tenant)
+        except TenantError as exc:
+            from fastapi.responses import JSONResponse
+            response = JSONResponse({"ok": False, "error": str(exc)}, status_code=401 if not tenant else 400)
+            await response(scope, receive, send)
+            return
+        token = _current_tenant.set(tenant)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _current_tenant.reset(token)
