@@ -76,7 +76,7 @@ def _first_ref(reg: AgentRegistry, agent_id: int, kind: str) -> str:
     return values[-1] if values else ""
 
 
-def _person_values(obj: dict, key: str, value_keys: set[str]) -> list[str]:
+def _person_values(obj: dict, key: str, value_keys: tuple[str, ...]) -> list[str]:
     raw = obj.get(key)
     if not isinstance(raw, list):
         return []
@@ -127,8 +127,8 @@ def _extract_contacts(obj: Any, depth: int = 5, limit: int = 50) -> list[tuple[s
         if not isinstance(value, dict):
             return
 
-        names = _person_values(value, "names", {"displayName", "displayNameLastFirst", "unstructuredName"})
-        emails = _person_values(value, "emailAddresses", {"value", "email"})
+        names = _person_values(value, "names", ("displayName", "unstructuredName", "displayNameLastFirst"))
+        emails = _person_values(value, "emailAddresses", ("value", "email"))
         for name in names[:5] or [""]:
             for address in emails[:5]:
                 address = address.strip().casefold()

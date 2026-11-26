@@ -275,3 +275,23 @@ def test_contact_extraction_ignores_failed_or_malformed_results(reg):
     loops.observe_tool_call(reg, agent_id, "gmail_search_people", {"query": "alice"}, {"successful": False}, True)
 
     assert reg.refs(agent_id) == []
+
+
+def test_contact_extraction_prefers_display_name_over_last_first(reg):
+    agent_id = loops.begin_run(reg, "Alice search", "find Alice")
+    result = {
+        "successful": True,
+        "data": {
+            "people": [
+                {
+                    "names": [{"displayNameLastFirst": "Chen, Alice", "displayName": "Alice Chen"}],
+                    "emailAddresses": [{"value": "alice@example.com"}],
+                }
+            ]
+        },
+    }
+
+    loops.observe_tool_call(reg, agent_id, "gmail_search_people", {"query": "alice"}, result, True)
+
+    names = {r.value for r in reg.refs(agent_id) if r.kind == "contact_name"}
+    assert names == {"alice chen"}
