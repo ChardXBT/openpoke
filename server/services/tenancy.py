@@ -13,6 +13,11 @@ import re
 import secrets
 import threading
 from contextlib import contextmanager
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Iterator, Optional
@@ -65,6 +70,35 @@ def _registry_path(root: Optional[Path] = None) -> Path:
     return (root or data_root()) / "tenants" / "registry.json"
 
 
+@contextmanager
+def _registry_file_lock(root: Optional[Path] = None) -> Iterator[None]:
+    """Serialize registry read/modify/write cycles across writer processes.
+
+    The lock file itself may remain after a crash; the OS releases the lock when
+    the process dies. Registry payloads are still replaced atomically below, so a
+    crashed writer leaves either the old or the new complete JSON document.
+    """
+    path = _registry_path(root).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            if path.stat().st_size == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _load(root: Optional[Path] = None) -> dict:
     try:
         data = json.loads(_registry_path(root).read_text(encoding="utf-8"))
@@ -86,11 +120,11 @@ def _write(data: dict, root: Optional[Path] = None) -> None:
 
 
 def provision_tenant(tenant_id: object, root: Optional[Path] = None) -> str:
-    """Return the storage namespace for a tenant, creating it atomically enough
-    for local hosting. Re-provisioning an active id is stable; a retired id gets
-    a fresh namespace rather than the old data."""
+    """Return the storage namespace for a tenant, creating it under a cross-process
+    file lock. Re-provisioning an active id is stable; a retired id gets a fresh
+    namespace rather than the old data."""
     public = validate_tenant_id(tenant_id)
-    with _registry_lock:
+    with _registry_lock, _registry_file_lock(root):
         data = _load(root)
         existing = data["active"].get(public)
         if isinstance(existing, str) and _NAMESPACE.fullmatch(existing):
@@ -104,7 +138,7 @@ def provision_tenant(tenant_id: object, root: Optional[Path] = None) -> str:
 
 def retire_tenant(tenant_id: object, root: Optional[Path] = None) -> bool:
     public = validate_tenant_id(tenant_id)
-    with _registry_lock:
+    with _registry_lock, _registry_file_lock(root):
         data = _load(root)
         namespace = data["active"].pop(public, None)
         if not namespace:

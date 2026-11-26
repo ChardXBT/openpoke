@@ -1,6 +1,10 @@
 import asyncio
+import json
+import multiprocessing
 import os
 import threading
+import time
+from pathlib import Path
 
 import pytest
 
@@ -382,3 +386,145 @@ def test_concurrent_provisioning_of_same_tenant_returns_one_namespace(tmp_path):
     assert not errors
     assert len(results) == 12
     assert len(set(results)) == 1
+
+
+def _provision_process(root, tenant, queue):
+    try:
+        queue.put((tenant, provision_tenant(tenant, root=Path(root)), None))
+    except Exception as exc:  # pragma: no cover - asserted in parent
+        queue.put((tenant, None, repr(exc)))
+
+
+def _retire_process(root, tenant, queue):
+    try:
+        queue.put((tenant, retire_tenant(tenant, root=Path(root)), None))
+    except Exception as exc:  # pragma: no cover - asserted in parent
+        queue.put((tenant, None, repr(exc)))
+
+
+def _provision_after_barrier_process(root, tenant, barrier, queue):
+    try:
+        barrier.wait()
+        queue.put((tenant, provision_tenant(tenant, root=Path(root)), None))
+    except Exception as exc:  # pragma: no cover - asserted in parent
+        queue.put((tenant, None, repr(exc)))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the deterministic write-delay hook is inherited through fork")
+def test_cross_process_registry_read_modify_write_is_serialized(tmp_path, monkeypatch):
+    enable(tmp_path)
+    import server.services.tenancy as tenancy_module
+
+    original_write = tenancy_module._write
+
+    def slow_write(data, root=None):
+        time.sleep(0.2)
+        original_write(data, root)
+
+    monkeypatch.setattr(tenancy_module, "_write", slow_write)
+    ctx = multiprocessing.get_context("fork")
+    barrier = ctx.Barrier(2)
+    queue = ctx.Queue()
+    processes = [ctx.Process(target=_provision_after_barrier_process, args=(str(tmp_path), tenant, barrier, queue))
+                 for tenant in ("alpha", "beta")]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(15)
+    assert all(process.exitcode == 0 for process in processes)
+    results = [queue.get(timeout=2) for _ in processes]
+    assert not any(error for _, _, error in results)
+    registry = json.loads((tmp_path / "tenants" / "registry.json").read_text(encoding="utf-8"))
+    assert sorted(registry["active"]) == ["alpha", "beta"]
+
+
+def test_concurrent_writer_processes_never_lose_registry_updates(tmp_path):
+    enable(tmp_path)
+    ctx = multiprocessing.get_context("fork" if os.name != "nt" else "spawn")
+    queue = ctx.Queue()
+    tenants = [f"tenant-{i % 4}" for i in range(16)]
+    processes = [ctx.Process(target=_provision_process, args=(str(tmp_path), tenant, queue))
+                 for tenant in tenants]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(15)
+    assert all(process.exitcode == 0 for process in processes)
+    results = [queue.get(timeout=2) for _ in processes]
+    assert not any(error for _, _, error in results)
+    registry = json.loads((tmp_path / "tenants" / "registry.json").read_text(encoding="utf-8"))
+    assert sorted(registry["active"]) == sorted(set(tenants))
+    assert len(registry["retired"]) == 0
+    for tenant in set(tenants):
+        namespaces = {namespace for seen, namespace, _ in results if seen == tenant}
+        assert namespaces == {registry["active"][tenant]}
+
+
+def test_concurrent_retire_and_reprovision_processes_leave_one_consistent_state(tmp_path):
+    enable(tmp_path)
+    provision_tenant("alice")
+    ctx = multiprocessing.get_context("fork" if os.name != "nt" else "spawn")
+    queue = ctx.Queue()
+    processes = [ctx.Process(target=_retire_process, args=(str(tmp_path), "alice", queue)),
+                 ctx.Process(target=_provision_process, args=(str(tmp_path), "alice", queue))]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(15)
+    assert all(process.exitcode == 0 for process in processes)
+    results = [queue.get(timeout=2) for _ in processes]
+    assert not any(error for _, _, error in results)
+    registry = json.loads((tmp_path / "tenants" / "registry.json").read_text(encoding="utf-8"))
+    states = ["alice" in registry["active"], "alice" in registry["retired"]]
+    assert sum(states) == 1
+
+
+def test_stale_lock_and_partial_tmp_files_do_not_block_or_corrupt_registry_writes(tmp_path):
+    enable(tmp_path)
+    registry = tmp_path / "tenants" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.with_suffix(".lock").write_bytes(b"stale lock artifact")
+    registry.with_suffix(".tmp").write_text('{"active": partial', encoding="utf-8")
+    namespace = provision_tenant("alice")
+    data = json.loads(registry.read_text(encoding="utf-8"))
+    assert data["active"] == {"alice": namespace}
+
+
+def test_transient_registry_write_failure_can_be_retried_without_corruption(tmp_path, monkeypatch):
+    enable(tmp_path)
+    import server.services.tenancy as tenancy_module
+
+    original_write = tenancy_module._write
+    calls = {"count": 0}
+
+    def flaky_write(data, root=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("injected transient write failure")
+        original_write(data, root)
+
+    monkeypatch.setattr(tenancy_module, "_write", flaky_write)
+    with pytest.raises(OSError):
+        provision_tenant("alice")
+    namespace = provision_tenant("alice")
+    data = json.loads((tmp_path / "tenants" / "registry.json").read_text(encoding="utf-8"))
+    assert data["active"] == {"alice": namespace}
+
+
+def _crash_holding_registry_lock(root):
+    import server.services.tenancy as tenancy_module
+
+    with tenancy_module._registry_file_lock(root=Path(root)):
+        os._exit(0)
+
+
+def test_crashed_writer_releases_registry_lock_and_later_write_succeeds(tmp_path):
+    enable(tmp_path)
+    ctx = multiprocessing.get_context("fork" if os.name != "nt" else "spawn")
+    process = ctx.Process(target=_crash_holding_registry_lock, args=(str(tmp_path),))
+    process.start()
+    process.join(10)
+    assert process.exitcode == 0
+    namespace = provision_tenant("alice")
+    data = json.loads((tmp_path / "tenants" / "registry.json").read_text(encoding="utf-8"))
+    assert data["active"] == {"alice": namespace}
