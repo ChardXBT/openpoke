@@ -217,3 +217,81 @@ def test_a_reply_on_the_thread_closes_the_waiting_loop(reg):
     assert reg.get(waiting.id).state == "done" and "replied: Re: Thursday lunch" in reg.get(waiting.id).state_note
     assert reg.get(draft.id).state == "waiting_on_user"  # a draft waiting on the user is not closed by a reply
     assert observe_reply(reg, None) == [] and observe_reply(reg, "thr_other") == []
+
+
+def test_gmail_contact_results_capture_display_names_and_addresses(reg):
+    agent_id = loops.begin_run(reg, "Alice search", "find Alice")
+    result = {
+        "successful": True,
+        "data": {
+            "people": [
+                {"names": [{"displayName": "Alice Chen"}], "emailAddresses": [{"value": "Alice.Chen@acme.com"}]},
+                {"names": [{"displayName": "Zoë Öberg"}], "emailAddresses": [{"value": "zoe@example.se"}]},
+                {"names": [{"displayName": "Alice Chen"}], "emailAddresses": [{"value": "alice.chen@acme.com"}]},
+                {"names": [{"displayName": "No Address"}]},
+                {"names": [], "emailAddresses": [{"value": "nameless@example.com"}]},
+            ]
+        },
+    }
+
+    loops.observe_tool_call(reg, agent_id, "gmail_search_people", {"query": "alice"}, result, True)
+
+    refs = {(r.kind, r.value) for r in reg.refs(agent_id)}
+    assert ("contact", "alice.chen@acme.com") in refs
+    assert ("contact_name", "alice chen") in refs
+    assert ("contact", "zoe@example.se") in refs
+    assert ("contact_name", "zoë öberg") in refs
+    assert ("contact", "nameless@example.com") in refs
+    assert ("contact_name", "nameless@example.com") not in refs
+    assert len([r for r in refs if r == ("contact", "alice.chen@acme.com")]) == 1
+
+
+def test_gmail_email_results_capture_sender_display_names(reg):
+    agent_id = loops.begin_run(reg, "Invoice search", "find invoice mail")
+    result = {
+        "successful": True,
+        "data": {
+            "messages": [
+                {"sender": "Bob Stone <bob@northwind.com>", "subject": "Invoice #402"},
+                {"sender": "bob@northwind.com", "subject": "duplicate without a name"},
+                {"sender": "", "subject": "empty sender"},
+            ]
+        },
+    }
+
+    loops.observe_tool_call(reg, agent_id, "task_email_search", {"search_query": "invoice"}, result, True)
+
+    refs = {(r.kind, r.value) for r in reg.refs(agent_id)}
+    assert ("contact", "bob@northwind.com") in refs
+    assert ("contact_name", "bob stone") in refs
+    assert all(value for _kind, value in refs)
+
+
+def test_contact_extraction_ignores_failed_or_malformed_results(reg):
+    agent_id = loops.begin_run(reg, "Alice search", "find Alice")
+    malformed = {"successful": True, "data": {"people": ["not-a-person", None, {"names": "bad"}]}}
+
+    loops.observe_tool_call(reg, agent_id, "gmail_search_people", {"query": "alice"}, malformed, True)
+    loops.observe_tool_call(reg, agent_id, "gmail_search_people", {"query": "alice"}, {"successful": False}, True)
+
+    assert reg.refs(agent_id) == []
+
+
+def test_contact_extraction_prefers_display_name_over_last_first(reg):
+    agent_id = loops.begin_run(reg, "Alice search", "find Alice")
+    result = {
+        "successful": True,
+        "data": {
+            "people": [
+                {
+                    "names": [{"displayNameLastFirst": "Chen, Alice", "displayName": "Alice Chen"}],
+                    "emailAddresses": [{"value": "alice@example.com"}],
+                }
+            ]
+        },
+    }
+
+    loops.observe_tool_call(reg, agent_id, "gmail_search_people", {"query": "alice"}, result, True)
+
+    names = {r.value for r in reg.refs(agent_id) if r.kind == "contact_name"}
+    assert names == {"alice chen"}

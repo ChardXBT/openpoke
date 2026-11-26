@@ -1,3 +1,5 @@
+import { pythonAuthHeaders } from '@/lib/ownerAuth';
+
 export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
@@ -19,7 +21,7 @@ export async function POST(req: Request) {
   try {
     const upstream = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...pythonAuthHeaders() },
       body: JSON.stringify({ timezone }),
     });
     

@@ -67,7 +67,7 @@ class TriggerScheduler:
 
     async def _poll_once(self) -> None:
         now = _utc_now()
-        due_triggers = self._service.get_due_triggers(before=now)
+        due_triggers = self._service.claim_due_triggers(before=now)
         if not due_triggers:
             return
 
@@ -81,6 +81,7 @@ class TriggerScheduler:
         try:
             fired_at = _utc_now()
             instructions = self._format_instructions(trigger, fired_at)
+            running_trigger = self._service.prepare_for_execution(trigger, fired_at=fired_at)
             logger.info(
                 "Dispatching trigger",
                 extra={
@@ -95,10 +96,10 @@ class TriggerScheduler:
                 instructions,
             )
             if result.success:
-                self._handle_success(trigger, fired_at)
+                self._handle_success(running_trigger, fired_at)
             else:
                 error_text = result.error or result.response
-                self._handle_failure(trigger, fired_at, error_text)
+                self._handle_failure(running_trigger, fired_at, error_text)
         except Exception as exc:  # pragma: no cover - defensive
             self._handle_failure(trigger, _utc_now(), str(exc))
             logger.exception(
@@ -113,7 +114,7 @@ class TriggerScheduler:
             "Trigger completed",
             extra={"trigger_id": trigger.id, "agent": trigger.agent_name},
         )
-        self._service.schedule_next_occurrence(trigger, fired_at=fired_at)
+        self._service.complete_execution(trigger)
 
     def _handle_failure(self, trigger: TriggerRecord, fired_at: datetime, error: str) -> None:
         logger.warning(
@@ -125,10 +126,9 @@ class TriggerScheduler:
             },
         )
         self._service.record_failure(trigger, error)
-        if trigger.recurrence_rule:
-            self._service.schedule_next_occurrence(trigger, fired_at=fired_at)
-        else:
+        if not trigger.recurrence_rule:
             self._service.clear_next_fire(trigger.id, agent_name=trigger.agent_name)
+        self._service.release_lease(trigger)
 
     def _format_instructions(self, trigger: TriggerRecord, fired_at: datetime) -> str:
         scheduled_for = trigger.next_trigger or _isoformat(fired_at)

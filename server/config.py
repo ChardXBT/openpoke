@@ -1,6 +1,7 @@
 """Simplified configuration management."""
 
 import os
+import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional
@@ -8,9 +9,15 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+def _env_file_path() -> Path:
+    """Return the env file used for local single-owner configuration."""
+    override = (os.getenv("OPENPOKE_ENV_FILE") or "").strip()
+    return Path(override) if override else Path(__file__).parent.parent / ".env"
+
+
 def _load_env_file() -> None:
     """Load .env from root directory if present."""
-    env_path = Path(__file__).parent.parent / ".env"
+    env_path = _env_file_path()
     if not env_path.is_file():
         return
     try:
@@ -71,8 +78,8 @@ class Settings(BaseModel):
     app_version: str = Field(default=DEFAULT_APP_VERSION)
 
     # Server runtime
-    # Localhost by default: the API has no auth and can read and send your email, so it must not
-    # be reachable from the network unless you choose that (OPENPOKE_HOST=0.0.0.0).
+    # Localhost by default. API routes require the owner token, but localhost binding is
+    # still the safe default; choose OPENPOKE_HOST=0.0.0.0 only behind a private tunnel.
     server_host: str = Field(default=os.getenv("OPENPOKE_HOST", "127.0.0.1"))
     server_port: int = Field(default=_env_int("OPENPOKE_PORT", 8001))
 
@@ -103,6 +110,8 @@ class Settings(BaseModel):
     anthropic_workspace_id: Optional[str] = Field(default_factory=lambda: (os.getenv("ANTHROPIC_WORKSPACE_ID") or "").strip() or None)
     composio_gmail_auth_config_id: Optional[str] = Field(default=os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID"))
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
+    # Single-owner API token. Generated on first server run and stored in .env; never sent to browsers.
+    owner_token: Optional[str] = Field(default_factory=lambda: (os.getenv("OPENPOKE_OWNER_TOKEN") or "").strip() or None)
 
     # HTTP behaviour
     # Only the web UI's origin by default: with "*", any web page you visit could script your Poke.
@@ -145,6 +154,63 @@ class Settings(BaseModel):
     def summarization_enabled(self) -> bool:
         """Flag indicating conversation summarisation is active."""
         return self.conversation_summary_threshold > 0
+
+
+def ensure_owner_token(settings: Settings) -> str:
+    """Return the owner token, generating and persisting a strong one on first run.
+
+    The API is fail-closed: callers never get a token-less escape hatch, and startup raises
+    if the generated token cannot be persisted for the server-side web proxy to use.
+    """
+    configured = (settings.owner_token or os.getenv("OPENPOKE_OWNER_TOKEN") or "").strip()
+    if configured:
+        settings.owner_token = configured
+        os.environ["OPENPOKE_OWNER_TOKEN"] = configured
+        return configured
+
+    env_path = _env_file_path()
+    lines: list[str] = []
+    if env_path.exists():
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise RuntimeError("OPENPOKE_OWNER_TOKEN is missing and .env cannot be read") from exc
+
+    token_line = -1
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key.strip() != "OPENPOKE_OWNER_TOKEN":
+            continue
+        value = value.strip().strip("'\"")
+        if value:
+            settings.owner_token = value
+            os.environ["OPENPOKE_OWNER_TOKEN"] = value
+            return value
+        if token_line < 0:
+            token_line = index
+
+    token = secrets.token_urlsafe(32)
+    new_line = f"OPENPOKE_OWNER_TOKEN={token}"
+    if token_line >= 0:
+        lines[token_line] = new_line
+    else:
+        lines.append(new_line)
+
+    try:
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = env_path.with_name(f".{env_path.name}.{os.getpid()}.tmp")
+        temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        temporary.replace(env_path)
+    except OSError as exc:
+        raise RuntimeError("OPENPOKE_OWNER_TOKEN is missing and could not be written to .env") from exc
+
+    settings.owner_token = token
+    os.environ["OPENPOKE_OWNER_TOKEN"] = token
+    return token
 
 
 @lru_cache(maxsize=1)

@@ -87,7 +87,8 @@ def test_repeated_ambiguous_send_ends_with_clarifying_question(routing, monkeypa
     result = asyncio.run(runtime.execute("yep send it"))
 
     assert result.success
-    assert result.response == "Which item do you mean?"
+    assert result.response.startswith("Which one do you mean: ") and result.response.endswith("?")
+    assert "Email to Alice – Q3 deck" in result.response and "Bob invoice follow-up" in result.response
     assert routing.chat.entries[-1] == ("poke", result.response)
     assert routing.dispatched == []
     assert len(calls) == runtime.MAX_TOOL_ITERATIONS
@@ -101,3 +102,14 @@ def test_iteration_limit_without_ambiguity_still_reports_failure(routing, monkey
     result = asyncio.run(routing.runtime_mod.InteractionAgentRuntime().execute("hello"))
     assert not result.success
     assert result.error == "Reached tool iteration limit without final response"
+
+
+def test_clarifying_question_fallback_handles_empty_duplicate_and_malformed_options():
+    helper = __import__(
+        "server.agents.interaction_agent.runtime", fromlist=["InteractionAgentRuntime"]
+    ).InteractionAgentRuntime._clarifying_question
+
+    assert helper([]) == "Which item do you mean?"
+    assert helper(["#1 Alpha · waiting on you: <quoted_data>x</quoted_data>", "#1 Alpha · waiting on you: x"]) == "Which item do you mean?"
+    assert helper(["not-an-id   Spaced   Name · detail", "#2 Other · detail"]) == "Which one do you mean: not-an-id Spaced Name or Other?"
+    assert helper(["#1 Alice &amp; Bob – Renovation · waiting on you", "#2 Zoë – Other · waiting on you"]) == "Which one do you mean: Alice & Bob – Renovation or Zoë – Other?"

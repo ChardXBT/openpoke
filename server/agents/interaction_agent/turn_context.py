@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Optional
+import uuid
 
 from ...services.execution.registry import get_agent_registry
 from ...services.execution.resolver import UNRESOLVED, EventMeta, Resolution, resolve
@@ -20,6 +21,7 @@ class TurnContext:
     message: str = ""  # the user's message this turn (for learning aliases from clarifications)
     challenged: set[int] = field(default_factory=set)  # targets already given confirm_target this turn
     blocked: int = 0  # needs_user_choice answers this turn (escalate the wording on repeats)
+    turn_id: str = field(default_factory=lambda: uuid.uuid4().hex)  # execution-result batch key
 
 
 current_turn: ContextVar[Optional[TurnContext]] = ContextVar("openpoke_turn_context", default=None)

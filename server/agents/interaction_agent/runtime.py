@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import re
+from html import unescape
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -43,6 +45,7 @@ class _LoopSummary:
     user_messages: List[str] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     execution_agents: Set[str] = field(default_factory=set)
+    choice_options: List[str] = field(default_factory=list)
 
 
 class InteractionAgentRuntime:
@@ -199,6 +202,10 @@ class InteractionAgentRuntime:
                         isinstance(result.payload, dict)
                         and result.payload.get("status") == "needs_user_choice"
                     )
+                    if needs_user_choice and isinstance(result.payload, dict):
+                        options = result.payload.get("options")
+                        if isinstance(options, list):
+                            summary.choice_options = [str(option) for option in options]
 
                 if result.user_message:
                     summary.user_messages.append(result.user_message)
@@ -211,7 +218,7 @@ class InteractionAgentRuntime:
                 messages.append(tool_message)
         else:
             if needs_user_choice:
-                summary.last_assistant_text = "Which item do you mean?"
+                summary.last_assistant_text = self._clarifying_question(summary.choice_options)
             else:
                 raise RuntimeError("Reached tool iteration limit without final response")
 
@@ -219,6 +226,24 @@ class InteractionAgentRuntime:
             logger.warning("Interaction loop exited without assistant content")
 
         return summary
+
+    @staticmethod
+    def _clarifying_question(option_cards: List[str]) -> str:
+        """Fixed fallback when a model keeps retrying an ambiguous irreversible tool call."""
+        names: List[str] = []
+        for card in option_cards:
+            first_part = str(card).split(" · ", 1)[0]
+            name = re.sub(r"^#\d+\s+", "", first_part).strip()
+            name = unescape(" ".join(name.split()))[:80]
+            if name and name not in names:
+                names.append(name)
+        if len(names) >= 2:
+            if len(names) == 2:
+                choices = f"{names[0]} or {names[1]}"
+            else:
+                choices = ", ".join(names[:-1]) + f", or {names[-1]}"
+            return f"Which one do you mean: {choices}?"
+        return "Which item do you mean?"
 
     def _close_replied_loops(self, event: EventMeta) -> None:
         """A reply on a thread an agent was waiting on closes that open item (reference mode)."""

@@ -1,3 +1,5 @@
+import { pythonAuthHeaders } from '@/lib/ownerAuth';
+
 const serverBase = process.env.PY_SERVER_URL || 'http://localhost:8001';
 const historyPath = `${serverBase.replace(/\/$/, '')}/api/v1/chat/history`;
 
@@ -5,7 +7,7 @@ async function forward(method: 'GET' | 'DELETE') {
   try {
     const res = await fetch(historyPath, {
       method,
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', ...pythonAuthHeaders() },
       cache: 'no-store',
     });
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta
+from email.utils import parseaddr
 from typing import Any, Callable, Iterable, Optional
 
 from ...logging_config import logger
@@ -27,6 +28,14 @@ _MAX_SUBJECT = 80
 _UNSAFE = re.compile(r"[<>\r\n\t]+")
 
 SEND_TOOLS = {"gmail_execute_draft", "gmail_reply_to_thread", "gmail_forward_email"}
+CONTACT_RESULT_TOOLS = {
+    "gmail_get_contacts",
+    "gmail_get_people",
+    "gmail_search_people",
+    "gmail_fetch_emails",
+    "task_email_search",
+}
+_EMAIL_ADDRESS = re.compile(r"^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$")
 
 
 def _clean(text: Any, limit: int = _MAX_SUBJECT) -> str:
@@ -67,6 +76,78 @@ def _first_ref(reg: AgentRegistry, agent_id: int, kind: str) -> str:
     return values[-1] if values else ""
 
 
+def _person_values(obj: dict, key: str, value_keys: tuple[str, ...]) -> list[str]:
+    raw = obj.get(key)
+    if not isinstance(raw, list):
+        return []
+    values: list[str] = []
+    for item in raw[:10]:
+        if not isinstance(item, dict):
+            continue
+        for value_key in value_keys:
+            value = item.get(value_key)
+            if isinstance(value, str) and value.strip():
+                values.append(value.strip())
+                break
+    return values
+
+
+def _sender_parts(value: Any) -> tuple[str, str]:
+    if not isinstance(value, str) or not value.strip():
+        return "", ""
+    name, address = parseaddr(value)
+    address = address.strip().casefold()
+    if not _EMAIL_ADDRESS.fullmatch(address):
+        return "", ""
+    return _clean(name.strip().strip('"'), 80), address
+
+
+def _extract_contacts(obj: Any, depth: int = 5, limit: int = 50) -> list[tuple[str, str]]:
+    """Collect (display name, address) pairs from Gmail/People API-shaped results.
+
+    The shapes differ by tool and by Composio wrapping, so this walks a bounded amount of
+    nested JSON and only pairs names with addresses inside the same person record.
+    """
+    found: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(name: str, address: str) -> None:
+        pair = (name, address)
+        if address and pair not in seen and len(found) < limit:
+            seen.add(pair)
+            found.append(pair)
+
+    def walk(value: Any, remaining: int) -> None:
+        if remaining < 0 or len(found) >= limit:
+            return
+        if isinstance(value, list):
+            for item in value[:20]:
+                walk(item, remaining - 1)
+            return
+        if not isinstance(value, dict):
+            return
+
+        names = _person_values(value, "names", ("displayName", "unstructuredName", "displayNameLastFirst"))
+        emails = _person_values(value, "emailAddresses", ("value", "email"))
+        for name in names[:5] or [""]:
+            for address in emails[:5]:
+                address = address.strip().casefold()
+                if _EMAIL_ADDRESS.fullmatch(address):
+                    add(_clean(name, 80), address)
+
+        for key in ("sender", "from"):
+            name, address = _sender_parts(value.get(key))
+            if address:
+                add(name, address)
+
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                walk(child, remaining - 1)
+
+    walk(obj, depth)
+    return found
+
+
 # ---------------------------------------------------------------- run lifecycle
 def _paused_key(agent_id: int) -> str:
     return f"paused_draft:{agent_id}"
@@ -103,6 +184,12 @@ def observe_tool_call(
         return
     args = args if isinstance(args, dict) else {}
     recipient = _clean(args.get("recipient_email"), 120).casefold()
+
+    if tool in CONTACT_RESULT_TOOLS:
+        for name, address in _extract_contacts(result):
+            reg.add_ref(agent_id, "contact", address)
+            if name:
+                reg.add_ref(agent_id, "contact_name", name)
 
     if tool == "gmail_create_draft":
         subject = _clean(args.get("subject"))

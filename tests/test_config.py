@@ -29,7 +29,7 @@ def test_default_model_is_served_successor(monkeypatch):
 
 
 def test_server_is_local_only_by_default(monkeypatch):
-    """The API has no auth and can send email: not on the network, not scriptable by other sites."""
+    """Localhost remains the safe default even though API routes require the owner token."""
     import importlib
 
     import server.config as config

@@ -45,6 +45,7 @@ class TriggerStore:
             timezone TEXT,
             status TEXT NOT NULL DEFAULT 'active',
             last_error TEXT,
+            lease_until TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -53,10 +54,18 @@ class TriggerStore:
         CREATE INDEX IF NOT EXISTS idx_triggers_agent_next
         ON triggers (agent_name, next_trigger);
         """
+        due_index_sql = """
+        CREATE INDEX IF NOT EXISTS idx_triggers_next_trigger
+        ON triggers (next_trigger);
+        """
         with self._lock, self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(schema_sql)
             conn.execute(index_sql)
+            conn.execute(due_index_sql)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(triggers)")}
+            if "lease_until" not in columns:
+                conn.execute("ALTER TABLE triggers ADD COLUMN lease_until TEXT")
 
     def insert(self, payload: Dict[str, Any]) -> int:
         with self._lock, self._connect() as conn:
@@ -93,6 +102,33 @@ class TriggerStore:
             cursor = conn.execute(sql, payload)
             return cursor.rowcount > 0
 
+    def update_if_lease(
+        self,
+        trigger_id: int,
+        agent_name: str,
+        fields: Dict[str, Any],
+        lease_until: Optional[str],
+    ) -> bool:
+        """Update a claimed row only while the caller's lease is still the current one."""
+        if not fields or lease_until is None:
+            return False
+        assignments = ", ".join(f"{key} = :{key}" for key in fields.keys())
+        sql = (
+            f"UPDATE triggers SET {assignments}, updated_at = :updated_at"
+            " WHERE id = :trigger_id AND agent_name = :agent_name"
+            " AND lease_until = :expected_lease_until"
+        )
+        payload = {
+            **fields,
+            "updated_at": to_storage_timestamp(utc_now()),
+            "trigger_id": trigger_id,
+            "agent_name": agent_name,
+            "expected_lease_until": lease_until,
+        }
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(sql, payload)
+            return cursor.rowcount > 0
+
     def list_for_agent(self, agent_name: str) -> List[TriggerRecord]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
@@ -106,9 +142,9 @@ class TriggerStore:
     ) -> List[TriggerRecord]:
         sql = (
             "SELECT * FROM triggers WHERE status = 'active' AND next_trigger IS NOT NULL"
-            " AND next_trigger <= ?"
+            " AND next_trigger <= ? AND (lease_until IS NULL OR lease_until < ?)"
         )
-        params: List[Any] = [before_iso]
+        params: List[Any] = [before_iso, before_iso]
         if agent_name:
             sql += " AND agent_name = ?"
             params.append(agent_name)
@@ -116,6 +152,45 @@ class TriggerStore:
         with self._lock, self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_record(row) for row in rows]
+
+    def claim_due(
+        self,
+        agent_name: Optional[str],
+        before_iso: str,
+        lease_until_iso: str,
+    ) -> List[TriggerRecord]:
+        """Atomically lease due triggers; only the worker whose UPDATE wins may run one."""
+        select_sql = (
+            "SELECT id FROM triggers WHERE status = 'active' AND next_trigger IS NOT NULL"
+            " AND next_trigger <= ? AND (lease_until IS NULL OR lease_until < ?)"
+        )
+        params: List[Any] = [before_iso, before_iso]
+        if agent_name:
+            select_sql += " AND agent_name = ?"
+            params.append(agent_name)
+        select_sql += " ORDER BY next_trigger, id"
+
+        claimed: List[TriggerRecord] = []
+        updated_at = to_storage_timestamp(utc_now())
+        with self._lock, self._connect() as conn:
+            ids = [int(row["id"]) for row in conn.execute(select_sql, params).fetchall()]
+            for trigger_id in ids:
+                update_sql = (
+                    "UPDATE triggers SET lease_until = ?, updated_at = ?"
+                    " WHERE id = ? AND status = 'active' AND next_trigger IS NOT NULL"
+                    " AND next_trigger <= ? AND (lease_until IS NULL OR lease_until < ?)"
+                )
+                update_params: List[Any] = [lease_until_iso, updated_at, trigger_id, before_iso, before_iso]
+                if agent_name:
+                    update_sql += " AND agent_name = ?"
+                    update_params.append(agent_name)
+                cursor = conn.execute(update_sql, update_params)
+                if cursor.rowcount != 1:
+                    continue
+                row = conn.execute("SELECT * FROM triggers WHERE id = ?", (trigger_id,)).fetchone()
+                if row:
+                    claimed.append(self._row_to_record(row))
+        return claimed
 
     def clear_all(self) -> None:
         with self._lock, self._connect() as conn:

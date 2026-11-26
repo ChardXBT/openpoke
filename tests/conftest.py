@@ -13,5 +13,6 @@ for _name, _value in {
     "OPENPOKE_MODEL": "",
     "OPENPOKE_MEMORY_MODEL": "",
     "ANTHROPIC_WORKSPACE_ID": "",
+    "OPENPOKE_OWNER_TOKEN": "offline-test-owner-token",
 }.items():
     os.environ[_name] = _value

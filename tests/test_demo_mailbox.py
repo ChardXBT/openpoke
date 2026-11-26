@@ -78,13 +78,14 @@ def test_demo_routes(tmp_path, monkeypatch):
     try:
         from server.app import app
 
+        auth = {"Authorization": "Bearer offline-test-owner-token"}
         client = TestClient(app)
         monkeypatch.setattr(demo_routes, "get_settings", lambda: Settings(fake_gmail=False))
-        assert client.get("/api/v1/demo/mailbox").status_code == 404
+        assert client.get("/api/v1/demo/mailbox", headers=auth).status_code == 404
         monkeypatch.setattr(demo_routes, "get_settings", lambda: Settings(fake_gmail=True))
-        assert client.get("/api/v1/demo/mailbox").json()["inbox"]
-        assert client.get("/api/v1/agents/open").json() == {"open": [], "recent": [], "total": 0}
-        assert client.get("/api/v1/me").json() == {"facts": []}
+        assert client.get("/api/v1/demo/mailbox", headers=auth).json()["inbox"]
+        assert client.get("/api/v1/agents/open", headers=auth).json() == {"open": [], "recent": [], "total": 0}
+        assert client.get("/api/v1/me", headers=auth).json() == {"facts": []}
     finally:
         _override.reset(token)
         set_agent_registry(None)
