@@ -154,10 +154,10 @@ def _semantic_scores(
                 for offset, similarity in enumerate(similarities):
                     value = float(similarity)
                     if value > 0.0:
-                        yield (value, ids[position + offset])
-                position += len(batch)
+                        yield (value, -(position + offset), ids[position + offset])
+                position += len(blobs)
 
-        return {agent_id: score for score, agent_id in heapq.nlargest(limit, positive_scores())}
+        return {agent_id: score for score, _order, agent_id in heapq.nlargest(limit, positive_scores())}
     except Exception as exc:  # embeddings are optional recall; lexical search must never break
         logger.debug(f"agent semantic search skipped: {exc}")
         return {}

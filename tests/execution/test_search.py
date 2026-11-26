@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from server.services.execution.registry import AgentRecord, AgentRegistry, Ref, normalize_name
-from server.services.execution.search import search_agents
+from server.services.execution.search import _semantic_scores, search_agents
 
 NOW = datetime(2026, 11, 20, 15, 0, 0, tzinfo=timezone.utc)
 
@@ -155,3 +155,44 @@ def test_embedder_failure_falls_back_to_lexical_search(reg, tmp_path, monkeypatc
         raise RuntimeError("rate limited")
 
     assert _ids(search_agents(reg, "ramen tokyo", now=NOW, embedder=broken))[0] == 2
+
+
+def test_semantic_embedding_recall_without_lexical_overlap_across_vector_batches(reg, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENPOKE_EMBEDDING_CACHE_DIR", str(tmp_path / "vectors"))
+    records = [
+        _rec(100 + i, f"Routine record {100 + i}", f"ordinary operations note {100 + i}", "", "done", 4 + i / 100)
+        for i in range(520)
+    ]
+    target = _rec(700, "Dormant reconcile ledger", "Reconcile dormant quarterly ledger variance", "", "done", 0.2)
+    reg.bulk_insert([*records, target], {})
+
+    def fake_embedder(texts: list[str]) -> list[list[float]]:
+        vectors = []
+        for text in texts:
+            folded = text.casefold()
+            if "unrelated magic query" in folded or "dormant reconcile ledger" in folded:
+                vectors.append([1.0, 0.0])
+            else:
+                vectors.append([0.0, 1.0])
+        return vectors
+
+    ids = _ids(search_agents(reg, "unrelated magic query", now=NOW, embedder=fake_embedder))
+    assert ids[:1] == [700]
+
+
+def test_semantic_candidate_heap_keeps_stable_order_for_duplicate_vectors(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENPOKE_EMBEDDING_CACHE_DIR", str(tmp_path / "vectors"))
+    reg = AgentRegistry(tmp_path / "tie-agents.db", clock=lambda: NOW)
+    records = [
+        _rec(i, f"same card {i}", "identical duplicate semantic text", "", "done", 1)
+        for i in range(1, 251)
+    ]
+    reg.bulk_insert(records, {})
+
+    def identical_embedder(texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in texts]
+
+    semantic = _semantic_scores(reg, "identical duplicate semantic text", identical_embedder)
+    assert len(semantic) == 200
+    assert max(semantic) == 200
+    assert min(semantic) == 1
