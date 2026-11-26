@@ -42,10 +42,12 @@ Numeric agent ids and trigger ids remain local to a tenant database. They are no
 
 Gmail account activation is scoped by tenant namespace. Without a tenant context there is no active Gmail account, so execution code fails closed instead of using whichever account connected last. Execution batching and per-agent locks are also keyed by tenant namespace, so same-named agents in concurrent tenants do not share a result batch or serialize through one global lock.
 
+When the flag is on, `TenantWorkerManager` scans the active tenant registry and starts one trigger scheduler plus one important-email watcher per tenant. Each service is constructed and started inside that tenant's context; asyncio copies the context into its worker tasks, so polls, reminder executions and Gmail dispatches keep using the correct namespace. Workers have per-tenant locks and in-flight state. Retiring a tenant cancels only its workers, and a failing tenant worker retries independently instead of stopping other tenants. No real Gmail, OAuth, hosted deployment or model call is added by this runner.
+
 ## Explicitly not done yet
 
 - `X-Openpoke-Tenant` is a groundwork contract, not authentication. A real deployment still needs a trusted identity boundary that authenticates the user and sets this header/server-side context. Never let clients spoof it through an untrusted proxy.
-- The global trigger scheduler and important-email watcher are stopped when the flag is enabled. Tenant-aware runners must iterate active tenant contexts explicitly before reminders or proactive mail are enabled.
+- Tenant quota and provider rate-limit policy are owner decisions. The runner exposes scan/retry/poll intervals as seams but does not choose new quotas or provider limits.
 - Tenant registry updates are sufficient for the local load harness but need a transactional database or file lock before multiple writer processes use them.
 - Retention/deletion currently tombstones the mapping; secure deletion of the retired namespace is a separate owner decision.
 - Composio/Gmail connection lifecycle needs a live owner review. The code scopes the active account, but OAuth account ownership must be verified with the real provider before deployment.

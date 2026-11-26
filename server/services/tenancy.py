@@ -133,6 +133,12 @@ def tenant_namespace(tenant_id: object, root: Optional[Path] = None) -> str:
     return namespace
 
 
+def active_tenants(root: Optional[Path] = None) -> list[str]:
+    """Public ids of active tenants, in stable order, without exposing namespaces."""
+    data = _load(root)
+    return sorted(data["active"])
+
+
 @contextmanager
 def tenant_context(tenant_id: object) -> Iterator[str]:
     public = validate_tenant_id(tenant_id)

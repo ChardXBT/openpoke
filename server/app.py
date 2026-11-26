@@ -12,6 +12,7 @@ from .logging_config import configure_logging, logger
 from .routes import api_router
 from .services import get_important_email_watcher, get_trigger_scheduler
 from .services.tenancy import TenantASGIMiddleware, multi_tenant_enabled
+from .services.tenant_workers import get_tenant_worker_manager
 
 
 # Register global exception handlers for consistent error responses across the API
@@ -72,7 +73,7 @@ app.include_router(api_router)
 # Initialize background services (trigger scheduler and email watcher) when the app starts
 async def _start_trigger_scheduler() -> None:
     if multi_tenant_enabled():
-        logger.info("multi-tenant storage enabled; global scheduler and Gmail watcher stay stopped until tenant-aware runners are configured")
+        await get_tenant_worker_manager().start()
         return
     scheduler = get_trigger_scheduler()
     await scheduler.start()
@@ -84,6 +85,7 @@ async def _start_trigger_scheduler() -> None:
 # Gracefully shutdown background services when the app stops
 async def _stop_trigger_scheduler() -> None:
     if multi_tenant_enabled():
+        await get_tenant_worker_manager().stop()
         return
     scheduler = get_trigger_scheduler()
     await scheduler.stop()
