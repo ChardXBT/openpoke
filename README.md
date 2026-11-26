@@ -107,7 +107,7 @@ You need Python 3.10+, Node 18+ and one model key: OpenRouter, OpenAI, or Anthro
 ```bash
 git clone https://github.com/ChardXBT/openpoke && cd openpoke
 python3 -m venv .venv && source .venv/bin/activate      # Windows: .\.venv\Scripts\Activate.ps1
-pip install -r server/requirements.txt
+pip install -r server/requirements.txt -r evals/requirements.txt pytest
 npm install --prefix web
 cp .env.example .env    # add OPENROUTER_API_KEY, or OPENPOKE_PROVIDER=openai + OPENAI_API_KEY
 echo "OPENPOKE_FAKE_GMAIL=1" >> .env     # a local demo inbox: nothing is ever sent
@@ -121,7 +121,7 @@ your [Composio](https://composio.dev) keys, and connect in *Settings → Gmail*.
 own assistant (privacy, cost, what it stores) is in [`docs/personal-use.md`](docs/personal-use.md).
 
 ```bash
-python -m pytest                       # 262 offline tests, no keys needed
+python -m pytest                       # 268 offline tests, no keys needed
 python -m evals.harness.runner --setups b0,b2,ours --split dev --sizes 30,1000 \
     --model anthropic/claude-haiku-5.5 --max-usd 2 --out evals/runs/try
 python -m evals.memory.run --models openai:gpt-6-luna --out evals/runs/memory-try
