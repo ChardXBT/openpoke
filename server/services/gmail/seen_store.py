@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Deque, Iterable, List, Optional, Set
 
 from ...logging_config import logger
+from ..tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
 
 
 class GmailSeenStore:
@@ -116,4 +117,27 @@ class GmailSeenStore:
             )
 
 
-__all__ = ["GmailSeenStore"]
+def _seen_path() -> Path:
+    return scoped_data_dir(data_root()) / "gmail_seen.json"
+
+
+_seen_store: Optional[GmailSeenStore] = None
+_tenant_seen_stores: dict[str, GmailSeenStore] = {}
+_seen_lock = threading.Lock()
+
+
+def get_gmail_seen_store(max_entries: int = 300) -> GmailSeenStore:
+    """Return the legacy seen store or the current tenant's isolated copy."""
+    global _seen_store
+    with _seen_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_seen_stores:
+                _tenant_seen_stores[namespace] = GmailSeenStore(_seen_path(), max_entries)
+            return _tenant_seen_stores[namespace]
+        if _seen_store is None:
+            _seen_store = GmailSeenStore(_seen_path(), max_entries)
+        return _seen_store
+
+
+__all__ = ["GmailSeenStore", "get_gmail_seen_store"]
