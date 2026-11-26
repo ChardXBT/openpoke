@@ -62,6 +62,7 @@ def test_memory_and_disk_caches_are_bounded(tmp_path):
     texts = ["a", "b", "c"]
     cached_embeddings(texts, lambda batch: fake_vectors(batch), tmp_path, store=store)
     assert store.memory_size <= 2
+    assert store.memory_bytes <= 2 * 3 * 4
     with sqlite3.connect(tmp_path / "embeddings.sqlite3") as conn:
         count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
     assert count <= 2

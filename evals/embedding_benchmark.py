@@ -68,7 +68,7 @@ def build_registry(path: Path, agents: int) -> AgentRegistry:
     return reg
 
 
-def run_benchmark(agents: int = 20_000, dimensions: int = 64, keep: Optional[Path] = None) -> dict:
+def run_benchmark(agents: int = 20_000, dimensions: int = 1536, keep: Optional[Path] = None) -> dict:
     if agents <= 0:
         raise ValueError("agents must be positive")
     if dimensions <= 0:
@@ -125,7 +125,7 @@ def run_benchmark(agents: int = 20_000, dimensions: int = 64, keep: Optional[Pat
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--agents", type=int, default=20_000)
-    parser.add_argument("--dimensions", type=int, default=64)
+    parser.add_argument("--dimensions", type=int, default=1536)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     summary = run_benchmark(args.agents, args.dimensions)

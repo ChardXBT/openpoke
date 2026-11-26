@@ -132,16 +132,22 @@ def _semantic_scores(
         ]
         store = EmbeddingStore()
         digests = prepare_embeddings([query, *cards], embedder, store)
-        query_vector = np.asarray(next(store.vectors_for([digests[0]], batch_size=1))[0], dtype=np.float32)
+        query_blob = next(store.vector_blobs_for([digests[0]], batch_size=1))[0]
+        query_vector = np.frombuffer(query_blob, dtype="<f4").copy()
+        if not np.isfinite(query_vector).all():
+            raise ValueError("invalid embedding cache entry")
         query_norm = float(np.linalg.norm(query_vector)) or 1.0
         query_unit = query_vector / query_norm
 
         def positive_scores():
             position = 0
-            for batch in store.vectors_for(digests[1:]):
-                matrix = np.asarray(batch, dtype=np.float32)
-                if matrix.ndim != 2 or matrix.shape[1] != query_vector.shape[0]:
+            for blobs in store.vector_blobs_for(digests[1:]):
+                width = query_vector.shape[0] * 4
+                if any(len(blob) != width for blob in blobs):
                     raise ValueError("cached vectors do not all have the same dimensions")
+                matrix = np.frombuffer(b"".join(blobs), dtype="<f4").reshape(len(blobs), query_vector.shape[0])
+                if not np.isfinite(matrix).all():
+                    raise ValueError("invalid embedding cache entry")
                 norms = np.linalg.norm(matrix, axis=1, keepdims=True)
                 matrix = matrix / np.where(norms == 0, 1.0, norms)
                 similarities = matrix @ query_unit

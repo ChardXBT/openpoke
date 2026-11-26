@@ -93,7 +93,7 @@ class EmbeddingStore:
             if disk_entries is None
             else max(0, disk_entries)
         )
-        self._memory: OrderedDict[str, list[float]] = OrderedDict()
+        self._memory: OrderedDict[str, bytes] = OrderedDict()
         self._memory_lock = threading.Lock()
         self.db_path = self.root / "embeddings.sqlite3"
         if self.disk_entries:
@@ -121,21 +121,29 @@ class EmbeddingStore:
         with self._memory_lock:
             return len(self._memory)
 
-    def _memory_get(self, digest: str) -> Optional[list[float]]:
+    @property
+    def memory_bytes(self) -> int:
         with self._memory_lock:
-            vector = self._memory.get(digest)
-            if vector is not None:
-                self._memory.move_to_end(digest)
-            return vector
+            return sum(len(blob) for blob in self._memory.values())
 
-    def _memory_put(self, digest: str, vector: list[float]) -> None:
+    def _memory_get(self, digest: str) -> Optional[bytes]:
+        with self._memory_lock:
+            blob = self._memory.get(digest)
+            if blob is not None:
+                self._memory.move_to_end(digest)
+            return blob
+
+    def _memory_put_blob(self, digest: str, blob: bytes) -> None:
         if self.memory_entries == 0:
             return
         with self._memory_lock:
-            self._memory[digest] = list(vector)
+            self._memory[digest] = bytes(blob)
             self._memory.move_to_end(digest)
             while len(self._memory) > self.memory_entries:
                 self._memory.popitem(last=False)
+
+    def _memory_put(self, digest: str, vector: list[float]) -> None:
+        self._memory_put_blob(digest, _pack_vector(vector))
 
     def _delete_rows(self, digests: list[str]) -> None:
         if not digests or not self.disk_entries:
@@ -162,7 +170,7 @@ class EmbeddingStore:
             placeholders = ",".join("?" for _ in chunk)
             with self._connect() as conn:
                 rows = conn.execute(
-                    f"SELECT digest, dimensions, vector FROM embeddings WHERE digest IN ({placeholders})",
+                    f"SELECT digest, dimensions, length(vector) FROM embeddings WHERE digest IN ({placeholders})",
                     chunk,
                 ).fetchall()
                 now = time.time()
@@ -170,13 +178,10 @@ class EmbeddingStore:
                     "UPDATE embeddings SET last_accessed = ? WHERE digest = ?",
                     [(now, row[0]) for row in rows],
                 )
-            for digest, dimensions, blob in rows:
-                try:
-                    vector = _unpack_vector(blob, int(dimensions))
-                except (struct.error, TypeError, ValueError):
+            for digest, dimensions, blob_size in rows:
+                if int(dimensions) <= 0 or int(blob_size) != int(dimensions) * 4:
                     corrupt.append(str(digest))
                     continue
-                self._memory_put(str(digest), vector)
                 valid.add(str(digest))
         self._delete_rows(corrupt)
         return valid
@@ -188,8 +193,9 @@ class EmbeddingStore:
         now = time.time()
         for digest, raw_vector in rows:
             vector = _clean_vector(raw_vector)
-            self._memory_put(digest, vector)
-            packed.append((digest, len(vector), _pack_vector(vector), now, now))
+            blob = _pack_vector(vector)
+            self._memory_put_blob(digest, blob)
+            packed.append((digest, len(vector), blob, now, now))
         if not self.disk_entries:
             return
         self.root.mkdir(parents=True, exist_ok=True)
@@ -208,18 +214,18 @@ class EmbeddingStore:
                     (excess,),
                 )
 
-    def vectors_for(self, digests: list[str], batch_size: int = _VECTOR_BATCH) -> Iterable[list[list[float]]]:
-        """Yield vectors aligned with ``digests`` in bounded-size batches."""
+    def vector_blobs_for(self, digests: list[str], batch_size: int = _VECTOR_BATCH) -> Iterable[list[bytes]]:
+        """Yield packed vectors aligned with ``digests`` in bounded-size batches."""
         for start in range(0, len(digests), batch_size):
             chunk = digests[start:start + batch_size]
-            vectors: list[Optional[list[float]]] = [None] * len(chunk)
+            blobs: list[Optional[bytes]] = [None] * len(chunk)
             db_positions: dict[str, list[int]] = {}
             for position, digest in enumerate(chunk):
                 cached = self._memory_get(digest)
                 if cached is None:
                     db_positions.setdefault(digest, []).append(position)
                 else:
-                    vectors[position] = cached
+                    blobs[position] = cached
             if db_positions:
                 if not self.disk_entries:
                     raise KeyError("embedding missing from memory-only cache")
@@ -230,20 +236,27 @@ class EmbeddingStore:
                         f"SELECT digest, dimensions, vector FROM embeddings WHERE digest IN ({placeholders})",
                         wanted,
                     ).fetchall()
-                found: dict[str, list[float]] = {}
+                found: dict[str, bytes] = {}
                 for digest, dimensions, blob in rows:
-                    vector = _unpack_vector(blob, int(dimensions))
-                    found[str(digest)] = vector
-                    self._memory_put(str(digest), vector)
+                    if int(dimensions) <= 0 or len(blob) != int(dimensions) * 4:
+                        raise ValueError("invalid embedding cache entry")
+                    packed = bytes(blob)
+                    found[str(digest)] = packed
+                    self._memory_put_blob(str(digest), packed)
                 for digest, positions in db_positions.items():
-                    vector = found.get(digest)
-                    if vector is None:
+                    blob = found.get(digest)
+                    if blob is None:
                         raise KeyError("embedding missing from cache")
                     for position in positions:
-                        vectors[position] = vector
-            if any(vector is None for vector in vectors):
+                        blobs[position] = blob
+            if any(blob is None for blob in blobs):
                 raise KeyError("embedding missing from cache")
-            yield [vector for vector in vectors if vector is not None]
+            yield [blob for blob in blobs if blob is not None]
+
+    def vectors_for(self, digests: list[str], batch_size: int = _VECTOR_BATCH) -> Iterable[list[list[float]]]:
+        """Yield vectors aligned with ``digests`` in bounded-size batches."""
+        for blobs in self.vector_blobs_for(digests, batch_size):
+            yield [_unpack_vector(blob, len(blob) // 4) for blob in blobs]
 
 
 def openai_embedder() -> Optional[Embedder]:
