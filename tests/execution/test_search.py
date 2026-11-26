@@ -82,3 +82,76 @@ def test_archived_excluded_unless_requested(reg):
 
 def test_limit_respected(reg):
     assert len(search_agents(reg, "carol alice bob tokyo", now=NOW, limit=3)) <= 3
+
+
+def test_paraphrase_finds_agent_without_shared_words(reg):
+    assert _ids(search_agents(reg, "that japan food list", now=NOW))[0] == 2
+
+
+def test_exact_lexical_match_outranks_paraphrase_recall(reg):
+    extra = _rec(20, "Food pantry donation", "Organize the neighborhood food donation list", "", "done", 0.2)
+    reg.bulk_insert([extra], {})
+    ids = _ids(search_agents(reg, "food list", now=NOW))
+    assert ids[0] == 20
+    assert 2 in ids
+
+
+def test_exact_reference_still_outranks_strong_paraphrase_matches(reg):
+    ids = _ids(search_agents(reg, "alice.chen@acme.com food japan invoice", now=NOW))
+    assert ids[0] == 1
+
+
+def test_zero_and_negative_limits_return_no_hits(reg):
+    assert search_agents(reg, "japan food", now=NOW, limit=0) == []
+    assert search_agents(reg, "japan food", now=NOW, limit=-1) == []
+
+
+def test_optional_embeddings_add_paraphrase_recall_and_cache_vectors(reg, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENPOKE_EMBEDDING_CACHE_DIR", str(tmp_path / "vectors"))
+    rec = _rec(40, "Subscription Audit", "Audit recurring subscriptions and duplicate payments", "", "done", 1)
+    reg.bulk_insert([rec], {})
+    calls: list[list[str]] = []
+
+    def fake_embedder(texts: list[str]) -> list[list[float]]:
+        calls.append(list(texts))
+        vectors = []
+        for text in texts:
+            folded = text.casefold()
+            if "twice paying" in folded or "subscription audit" in folded:
+                vectors.append([1.0, 0.0])
+            elif "unrelated" in folded:
+                vectors.append([0.0, 1.0])
+            else:
+                vectors.append([0.1, 0.9])
+        return vectors
+
+    query = "which subscriptions did you say i was twice paying for"
+    ids = _ids(search_agents(reg, query, now=NOW, embedder=fake_embedder))
+    assert ids[0] == 40
+    first_call_count = len(calls)
+    assert first_call_count > 0 and len(list((tmp_path / "vectors").glob("*.json"))) > 0
+
+    ids = _ids(search_agents(reg, query, now=NOW, embedder=fake_embedder))
+    assert ids[0] == 40
+    assert len(calls) == first_call_count  # second identical search is served from the vector cache
+
+
+def test_exact_reference_outranks_semantic_embedding_match(reg, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENPOKE_EMBEDDING_CACHE_DIR", str(tmp_path / "vectors"))
+    rec = _rec(41, "Subscription Audit", "Audit recurring subscriptions and duplicate payments", "", "done", 0.1)
+    reg.bulk_insert([rec], {})
+
+    def fake_embedder(texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] if "subscription" in text.casefold() or "audit recurring" in text.casefold() else [0.0, 1.0] for text in texts]
+
+    ids = _ids(search_agents(reg, "alice.chen@acme.com subscription", now=NOW, embedder=fake_embedder))
+    assert ids[0] == 1
+
+
+def test_embedder_failure_falls_back_to_lexical_search(reg, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENPOKE_EMBEDDING_CACHE_DIR", str(tmp_path / "vectors"))
+
+    def broken(texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("rate limited")
+
+    assert _ids(search_agents(reg, "ramen tokyo", now=NOW, embedder=broken))[0] == 2
