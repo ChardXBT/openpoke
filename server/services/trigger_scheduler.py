@@ -10,6 +10,7 @@ from ..agents.execution_agent.batch_manager import ExecutionBatchManager
 from ..agents.execution_agent.runtime import ExecutionResult
 from ..logging_config import logger
 from .triggers import TriggerRecord, get_trigger_service
+from .triggers.service import TriggerLeaseLostError
 
 
 UTC = timezone.utc
@@ -26,8 +27,15 @@ def _isoformat(dt: datetime) -> str:
 class TriggerScheduler:
     """Polls stored triggers and launches execution agents when due."""
 
-    def __init__(self, poll_interval_seconds: float = 10.0) -> None:
+    def __init__(
+        self,
+        poll_interval_seconds: float = 10.0,
+        lease_seconds: int = 120,
+        heartbeat_interval_seconds: float = 30.0,
+    ) -> None:
         self._poll_interval = poll_interval_seconds
+        self._lease_seconds = max(1, int(lease_seconds))
+        self._heartbeat_interval_seconds = max(0.01, float(heartbeat_interval_seconds))
         self._service = get_trigger_service()
         self._task: Optional[asyncio.Task[None]] = None
         self._running = False
@@ -67,7 +75,7 @@ class TriggerScheduler:
 
     async def _poll_once(self) -> None:
         now = _utc_now()
-        due_triggers = self._service.claim_due_triggers(before=now)
+        due_triggers = self._service.claim_due_triggers(before=now, lease_seconds=self._lease_seconds)
         if not due_triggers:
             return
 
@@ -78,10 +86,14 @@ class TriggerScheduler:
             asyncio.create_task(self._execute_trigger(trigger), name=f"trigger-{trigger.id}")
 
     async def _execute_trigger(self, trigger: TriggerRecord) -> None:
+        execution_task: Optional[asyncio.Task[ExecutionResult]] = None
+        heartbeat_task: Optional[asyncio.Task[bool]] = None
         try:
             fired_at = _utc_now()
             instructions = self._format_instructions(trigger, fired_at)
             running_trigger = self._service.prepare_for_execution(trigger, fired_at=fired_at)
+            if not self._service.renew_lease(running_trigger, lease_seconds=self._lease_seconds):
+                raise TriggerLeaseLostError(f"trigger {trigger.id} lease is no longer current")
             logger.info(
                 "Dispatching trigger",
                 extra={
@@ -91,15 +103,40 @@ class TriggerScheduler:
                 },
             )
             execution_manager = ExecutionBatchManager()
-            result = await execution_manager.execute_agent(
-                trigger.agent_name,
-                instructions,
+            execution_task = asyncio.create_task(
+                execution_manager.execute_agent(
+                    trigger.agent_name,
+                    instructions,
+                ),
+                name=f"trigger-execution-{trigger.id}",
             )
+            heartbeat_task = asyncio.create_task(
+                self._renew_lease_loop(running_trigger),
+                name=f"trigger-lease-heartbeat-{trigger.id}",
+            )
+            done, _ = await asyncio.wait(
+                {execution_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done:
+                execution_task.cancel()
+                await asyncio.gather(execution_task, return_exceptions=True)
+                logger.warning(
+                    "Trigger execution stopped after lease ownership was lost",
+                    extra={"trigger_id": trigger.id, "agent": trigger.agent_name},
+                )
+                return
+            result = await execution_task
             if result.success:
                 self._handle_success(running_trigger, fired_at)
             else:
                 error_text = result.error or result.response
                 self._handle_failure(running_trigger, fired_at, error_text)
+        except TriggerLeaseLostError:
+            logger.warning(
+                "Trigger execution was not started because its lease was stale",
+                extra={"trigger_id": trigger.id, "agent": trigger.agent_name},
+            )
         except Exception as exc:  # pragma: no cover - defensive
             self._handle_failure(trigger, _utc_now(), str(exc))
             logger.exception(
@@ -107,7 +144,20 @@ class TriggerScheduler:
                 extra={"trigger_id": trigger.id, "agent": trigger.agent_name},
             )
         finally:
+            if heartbeat_task and not heartbeat_task.done():
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
             self._in_flight.discard(trigger.id)
+
+    async def _renew_lease_loop(self, trigger: TriggerRecord) -> bool:
+        while True:
+            await asyncio.sleep(self._heartbeat_interval_seconds)
+            try:
+                renewed = self._service.renew_lease(trigger, lease_seconds=self._lease_seconds)
+            except Exception:  # pragma: no cover - defensive; fail closed below
+                renewed = False
+            if not renewed:
+                return False
 
     def _handle_success(self, trigger: TriggerRecord, fired_at: datetime) -> None:
         logger.info(
@@ -125,10 +175,7 @@ class TriggerScheduler:
                 "error": error,
             },
         )
-        self._service.record_failure(trigger, error)
-        if not trigger.recurrence_rule:
-            self._service.clear_next_fire(trigger.id, agent_name=trigger.agent_name)
-        self._service.release_lease(trigger)
+        self._service.fail_execution(trigger, error)
 
     def _format_instructions(self, trigger: TriggerRecord, fired_at: datetime) -> str:
         scheduled_for = trigger.next_trigger or _isoformat(fired_at)

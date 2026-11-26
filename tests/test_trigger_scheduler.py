@@ -139,6 +139,7 @@ def test_existing_trigger_database_gains_lease_column_and_due_index(tmp_path):
     indexes = {row[1] for row in conn.execute("PRAGMA index_list(triggers)")}
     conn.close()
     assert "lease_until" in columns
+    assert "lease_token" in columns
     assert "idx_triggers_next_trigger" in indexes
 
 
@@ -173,6 +174,12 @@ def test_stale_recurring_worker_cannot_clear_a_newer_lease(tmp_path, monkeypatch
     second = service.claim_due_triggers(before=later)[0]
     assert second.lease_until != first.lease_until
 
+    import pytest
+    from server.services.triggers.service import TriggerLeaseLostError
+
+    with pytest.raises(TriggerLeaseLostError):
+        service.prepare_for_execution(first, fired_at=later)
+
     service.release_lease(first)
     stored = service._store.fetch_one(trigger_id, first.agent_name)
     assert stored is not None and stored.lease_until == second.lease_until
@@ -180,3 +187,135 @@ def test_stale_recurring_worker_cannot_clear_a_newer_lease(tmp_path, monkeypatch
     service.complete_execution(first)
     stored = service._store.fetch_one(trigger_id, first.agent_name)
     assert stored is not None and stored.lease_until == second.lease_until
+
+
+def test_claims_get_unique_fencing_tokens_and_renewal_extends_the_lease(tmp_path, monkeypatch):
+    import server.services.triggers.service as trigger_service_mod
+
+    service = _service(tmp_path)
+    trigger = _due_trigger(service)
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    monkeypatch.setattr(trigger_service_mod, "utc_now", lambda: base)
+
+    first = service.claim_due_triggers(before=base)[0]
+    assert first.lease_token
+    original_until = first.lease_until
+
+    later = base + timedelta(seconds=30)
+    monkeypatch.setattr(trigger_service_mod, "utc_now", lambda: later)
+    assert service.renew_lease(first, lease_seconds=120)
+    renewed = service._store.fetch_one(trigger.id, trigger.agent_name)
+    assert renewed is not None
+    assert renewed.lease_token == first.lease_token
+    assert renewed.lease_until is not None and renewed.lease_until > (original_until or "")
+
+    expired = to_storage_timestamp(later - timedelta(seconds=1))
+    service._store.update(trigger.id, trigger.agent_name, {"lease_until": expired})
+    second = service.claim_due_triggers(before=later)[0]
+    assert second.lease_token != first.lease_token
+    assert not service.renew_lease(first, lease_seconds=120)
+    assert service.renew_lease(second, lease_seconds=120)
+
+
+def test_stale_one_shot_worker_cannot_complete_or_fail_over_a_newer_claim(tmp_path):
+    service = _service(tmp_path)
+    trigger = _due_trigger(service)
+    now = datetime.now(timezone.utc)
+
+    first = service.claim_due_triggers(before=now)[0]
+    expired = to_storage_timestamp(now - timedelta(seconds=1))
+    service._store.update(trigger.id, trigger.agent_name, {"lease_until": expired})
+    second = service.claim_due_triggers(before=now)[0]
+    assert second.lease_token != first.lease_token
+
+    service.complete_execution(first)
+    stored = service._store.fetch_one(trigger.id, trigger.agent_name)
+    assert stored is not None
+    assert stored.status == "active"
+    assert stored.next_trigger is not None
+    assert stored.lease_token == second.lease_token
+
+    service.fail_execution(first, "stale failure")
+    stored = service._store.fetch_one(trigger.id, trigger.agent_name)
+    assert stored is not None
+    assert stored.status == "active"
+    assert stored.next_trigger is not None
+    assert stored.lease_token == second.lease_token
+
+
+def test_stale_one_shot_execution_is_not_started(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    trigger = _due_trigger(service)
+    now = datetime.now(timezone.utc)
+    first = service.claim_due_triggers(before=now)[0]
+    expired = to_storage_timestamp(now - timedelta(seconds=1))
+    service._store.update(trigger.id, trigger.agent_name, {"lease_until": expired})
+    second = service.claim_due_triggers(before=now)[0]
+    assert second.lease_token != first.lease_token
+    calls = []
+
+    class FastExecutionBatchManager:
+        async def execute_agent(self, agent_name, instructions):
+            calls.append(agent_name)
+            return ExecutionResult(agent_name=agent_name, success=True, response="done")
+
+    monkeypatch.setattr(scheduler_mod, "ExecutionBatchManager", FastExecutionBatchManager)
+
+    async def run():
+        scheduler = TriggerScheduler(lease_seconds=1, heartbeat_interval_seconds=10)
+        scheduler._service = service
+        await scheduler._execute_trigger(first)
+
+    asyncio.run(run())
+
+    assert calls == []
+    stored = service._store.fetch_one(trigger.id, trigger.agent_name)
+    assert stored is not None and stored.lease_token == second.lease_token
+
+
+def test_renewal_loss_cancels_slow_execution_before_completion(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    trigger = _due_trigger(service)
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    class SlowExecutionBatchManager:
+        async def execute_agent(self, agent_name, instructions):
+            started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                finished.set()
+                raise
+            return ExecutionResult(agent_name=agent_name, success=True, response="done")
+
+    monkeypatch.setattr(scheduler_mod, "ExecutionBatchManager", SlowExecutionBatchManager)
+
+    async def run():
+        scheduler = TriggerScheduler(lease_seconds=1, heartbeat_interval_seconds=0.01)
+        scheduler._service = service
+        claimed = service.claim_due_triggers(before=datetime.now(timezone.utc))[0]
+        original_renew = service.renew_lease
+        calls = 0
+
+        def expire_then_lose(record, lease_seconds):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                expired = to_storage_timestamp(datetime.now(timezone.utc) - timedelta(seconds=1))
+                service._store.update(record.id, record.agent_name, {"lease_until": expired})
+                service.claim_due_triggers(before=datetime.now(timezone.utc))
+            return original_renew(record, lease_seconds=lease_seconds)
+
+        monkeypatch.setattr(service, "renew_lease", expire_then_lose)
+        task = asyncio.create_task(scheduler._execute_trigger(claimed))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        await asyncio.wait_for(task, timeout=1)
+        assert calls == 2
+
+    asyncio.run(run())
+
+    stored = service._store.fetch_one(trigger.id, trigger.agent_name)
+    assert stored is not None and stored.status == "active"
+    assert started.is_set() and finished.is_set()
