@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import threading
 import time
@@ -28,6 +29,26 @@ MODELS_CACHE = Path(__file__).resolve().parents[1] / ".cache" / "models.json"
 RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"
 
 Transport = Callable[[str, dict, dict], Awaitable[tuple[int, dict]]]
+
+
+def _nonnegative_int(value) -> int:
+    """Usage counter as an int; malformed, negative and non-finite values count as zero."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(number) or number <= 0:
+        return 0
+    return int(number)
+
+
+def _valid_reported_cost(value) -> float | None:
+    """Provider-reported cost only when it is finite and non-negative."""
+    try:
+        cost = float(value)
+    except (TypeError, ValueError):
+        return None
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
 
 class BudgetExceeded(RuntimeError):
@@ -202,8 +223,8 @@ class LLMClient:
             latency = time.perf_counter() - started
             if status == 200 and body.get("choices"):
                 usage = body.get("usage") or {}
-                prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                completion_tokens = int(usage.get("completion_tokens") or 0)
+                prompt_tokens = _nonnegative_int(usage.get("prompt_tokens"))
+                completion_tokens = _nonnegative_int(usage.get("completion_tokens"))
                 raw_details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
                 details = raw_details if isinstance(raw_details, dict) else {}
 
@@ -211,8 +232,8 @@ class LLMClient:
                     for source in (details, usage):
                         for name in names:
                             value = source.get(name)
-                            if isinstance(value, (int, float)) and value > 0:
-                                return int(value)
+                            if isinstance(value, (int, float)):
+                                return _nonnegative_int(value)
                     return 0
 
                 cached = usage_count("cached_tokens", "cache_read_input_tokens", "prompt_cache_read_tokens")
@@ -222,7 +243,7 @@ class LLMClient:
                     # Inconsistent usage is not a licence to undercharge: price every prompt token uncached.
                     cached = created = 0
                 uncached = prompt_tokens - cached - created
-                cost = usage.get("cost")
+                cost = _valid_reported_cost(usage.get("cost"))
                 cache_unknown = False
                 if cost is None:
                     price = self.pricing.get(self.model)

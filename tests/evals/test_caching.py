@@ -75,3 +75,36 @@ def test_inconsistent_cache_totals_are_priced_uncached_and_flagged(tmp_path):
     assert res.cached_prompt_tokens == 0 and res.cache_creation_prompt_tokens == 0
     assert res.cost_usd == pytest.approx(10 * 1e-6)
     assert res.cache_cost_unknown is True
+
+
+def test_negative_token_counts_never_undercharge(tmp_path):
+    client = make_client(tmp_path, {
+        "prompt_tokens": -100,
+        "completion_tokens": -10,
+    })
+    res = asyncio.run(client.complete("s", [], []))
+    assert res.prompt_tokens == 0
+    assert res.completion_tokens == 0
+    assert res.cost_usd == 0
+
+
+def test_negative_reported_cost_falls_back_to_conservative_pricing(tmp_path):
+    client = make_client(tmp_path, {
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "cost": -0.5,
+    })
+    res = asyncio.run(client.complete("s", [], []))
+    assert res.cost_usd == pytest.approx(100 * 1e-6 + 10 * 2e-6)
+
+
+def test_nonfinite_cache_counts_are_conservative(tmp_path):
+    client = make_client(tmp_path, {
+        "prompt_tokens": 10,
+        "completion_tokens": 0,
+        "prompt_tokens_details": {"cached_tokens": float("inf")},
+    })
+    res = asyncio.run(client.complete("s", [], []))
+    assert res.uncached_prompt_tokens == 10
+    assert res.cached_prompt_tokens == 0
+    assert res.cost_usd == pytest.approx(10 * 1e-6)
