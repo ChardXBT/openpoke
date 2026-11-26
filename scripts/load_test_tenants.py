@@ -7,10 +7,15 @@ import argparse
 import json
 import os
 import statistics
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def configure(root: Path) -> None:
