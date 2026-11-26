@@ -112,6 +112,10 @@ class Settings(BaseModel):
     composio_api_key: Optional[str] = Field(default=os.getenv("COMPOSIO_API_KEY"))
     # Single-owner API token. Generated on first server run and stored in .env; never sent to browsers.
     owner_token: Optional[str] = Field(default_factory=lambda: (os.getenv("OPENPOKE_OWNER_TOKEN") or "").strip() or None)
+    # Pub/Sub topic for Gmail push notifications. Empty means push is off; polling still works.
+    gmail_push_topic: Optional[str] = Field(default=(os.getenv("OPENPOKE_GMAIL_PUBSUB_TOPIC") or "").strip() or None)
+    # Shared token in the Pub/Sub push URL. Required when the endpoint is exposed beyond localhost.
+    gmail_push_shared_secret: Optional[str] = Field(default=(os.getenv("OPENPOKE_GMAIL_PUSH_SHARED_SECRET") or "").strip() or None)
 
     # HTTP behaviour
     # Only the web UI's origin by default: with "*", any web page you visit could script your Poke.

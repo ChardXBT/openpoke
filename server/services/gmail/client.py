@@ -43,10 +43,18 @@ def _set_active_gmail_user_id(user_id: Optional[str]) -> None:
     if key is None:
         return  # fail closed: no request tenant means no account may become active
     with _ACTIVE_USER_ID_LOCK:
+        changed = _ACTIVE_USER_IDS.get(key) != (sanitized or None)
         if sanitized:
             _ACTIVE_USER_IDS[key] = sanitized
         else:
             _ACTIVE_USER_IDS.pop(key, None)
+    if changed:
+        try:
+            from .push import set_gmail_push_service
+
+            set_gmail_push_service(None)
+        except Exception:
+            pass
 
 
 def _demo_mode() -> bool:

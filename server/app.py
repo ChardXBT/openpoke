@@ -75,7 +75,7 @@ def _bearer_token(request: Request) -> str:
 async def _require_owner_token(request: Request, call_next):
     """Fail closed on every API route except health; the web proxy supplies the token server-side."""
     path = request.url.path
-    if not path.startswith("/api/v1") or path == "/api/v1/health":
+    if not path.startswith("/api/v1") or path in {"/api/v1/health", "/api/v1/gmail/push"}:
         return await call_next(request)
 
     configured = (get_settings().owner_token or "").strip()
@@ -98,12 +98,16 @@ app.include_router(api_router)
 async def _start_trigger_scheduler() -> None:
     ensure_owner_token(get_settings())
     if multi_tenant_enabled():
-        logger.info("multi-tenant storage enabled; global scheduler and Gmail watcher stay stopped until tenant-aware runners are configured")
+        logger.info("multi-tenant storage enabled; global scheduler, Gmail watcher and Gmail push renewal stay stopped until tenant-aware runners are configured")
         return
     scheduler = get_trigger_scheduler()
     await scheduler.start()
     watcher = get_important_email_watcher()
     await watcher.start()
+    if _settings.gmail_push_topic:
+        from .services.gmail.push import get_gmail_push_watch_renewer
+
+        await get_gmail_push_watch_renewer().start()
 
 
 @app.on_event("shutdown")
@@ -115,6 +119,10 @@ async def _stop_trigger_scheduler() -> None:
     await scheduler.stop()
     watcher = get_important_email_watcher()
     await watcher.stop()
+    if _settings.gmail_push_topic:
+        from .services.gmail.push import get_gmail_push_watch_renewer
+
+        await get_gmail_push_watch_renewer().stop()
 
 
 __all__ = ["app"]

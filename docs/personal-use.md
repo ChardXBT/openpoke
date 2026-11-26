@@ -39,7 +39,7 @@ npm run dev --prefix web           # chat on http://localhost:3000
 Remove `OPENPOKE_FAKE_GMAIL`, add `COMPOSIO_API_KEY` and `COMPOSIO_GMAIL_AUTH_CONFIG_ID` (from
 [composio.dev](https://composio.dev/)), restart, then open *Settings → Gmail* in the web app and
 finish the OAuth flow. Poke can then search, draft, reply and forward, and the important-email
-watcher starts telling you about mail that matters.
+watcher starts telling you about mail that matters. For lower-latency replies on threads Poke is already tracking, Gmail Pub/Sub push setup is in [`gmail-push.md`](gmail-push.md).
 
 ## 3. Let it get to know you
 
