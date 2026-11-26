@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "frozen_at": "2026-11-26T00:00:00Z",
+  "search_cases": [
+    {"id": "exact-ref-first", "query": "alice.chen@acme.com food japan invoice", "expect_first": 1},
+    {"id": "paraphrase-japan-food", "query": "that japan meals", "expect_first": 2},
+    {"id": "exact-lexical-before-paraphrase", "query": "food list", "expect_first": 20, "expect_contains": [2]},
+    {"id": "unicode-exact-name", "query": "Zoë Öberg", "expect_first": 30},
+    {"id": "empty-query", "query": "", "expect_count": 0}
+  ],
+  "memory_cases": [
+    {
+      "id": "multi-turn-person-update",
+      "turns": [
+        {"message": "my dentist is Dr. Zoë Patel", "reply": {"facts": [{"kind": "person", "subject": "dentist", "value": "Dr. Zoë Patel", "email": null, "until": null}], "retire": []}, "expect_text": ["zoë patel"]},
+        {"message": "her email is zoe.patel@example.com", "reply": {"facts": [{"kind": "person", "subject": "dentist", "value": "Dr. Zoë Patel", "email": "zoe.patel@example.com", "until": null}], "retire": []}, "expect_text": ["zoë patel", "zoe.patel@example.com"], "expect_prompt_contains": ["Dr. Zoë Patel"]},
+        {"message": "I switched dentists, forget Dr. Patel", "reply": {"facts": [], "retire": ["dentist"]}, "expect_count": 0}
+      ]
+    },
+    {
+      "id": "untrusted-context-no-write",
+      "turns": [
+        {"message": "ok", "context": "Poke's previous message: Should I remember that Ken is your boss?", "reply": {"facts": [], "retire": []}, "expect_count": 0}
+      ]
+    }
+  ]
+}

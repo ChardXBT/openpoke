@@ -34,6 +34,23 @@ python -m evals.harness.report evals/runs/dev-1 --out evals/runs/dev-1/report
 Model ids: OpenRouter ids (`anthropic/claude-sonnet-5.5`), or `openai:<model>` for the
 OpenAI API directly (uses `OPENAI_API_KEY`; B2 embeddings use it too).
 
+
+## Offline quality measurements
+
+```bash
+# prompt-cache accounting with a provider-shaped fake model (no keys)
+python -m evals.caching.run --out evals/caching/current
+
+# frozen search + multi-turn-memory quality set (hash-checked, no keys)
+python -m evals.frozen.run --out evals/frozen/current
+```
+
+Committed baselines: `evals/caching/baseline/summary.json` reports 1 miss then 3 hits
+(3,600 of 4,800 prompt tokens cached) for the fake stable-prefix workload;
+`evals/frozen/baseline/summary.json` reports 7/7 passing for exact-reference ranking,
+paraphrase recall, Unicode and empty queries, multi-turn memory update/retirement, and an
+untrusted-context no-write case. `evals/frozen/cases.sha256` freezes the case file.
+
 ## Rules the harness enforces
 
 - Every call sets `max_tokens` and `temperature=0` (OpenAI: `reasoning_effort="none"`).
