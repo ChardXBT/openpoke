@@ -75,7 +75,7 @@ def _bearer_token(request: Request) -> str:
 async def _require_owner_token(request: Request, call_next):
     """Fail closed on every API route except health; the web proxy supplies the token server-side."""
     path = request.url.path
-    if not path.startswith("/api/v1") or path == "/api/v1/health":
+    if not path.startswith("/api/v1") or path in {"/api/v1/health", "/api/v1/gmail/push"}:
         return await call_next(request)
 
     configured = (get_settings().owner_token or "").strip()

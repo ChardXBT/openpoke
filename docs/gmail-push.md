@@ -22,8 +22,7 @@ call is part of the test suite.
    ```
 
 5. Expose **only** `POST /api/v1/gmail/push` through your own HTTPS reverse proxy. Do not expose
-   `/api/v1/gmail/push/watch`, `/connect`, `/status`, or any other OpenPoke route: the API itself is
-   still a personal localhost API and the push token is not a general login system.
+   `/api/v1/gmail/push/watch`, `/connect`, `/status`, or any other OpenPoke route: those routes stay behind the owner-token API boundary. Only the push endpoint is exempted so Pub/Sub can use its one-purpose URL token, and the server refuses push when no shared secret is configured.
 6. Create a push subscription whose endpoint includes the token:
 
    ```bash
@@ -39,7 +38,7 @@ call is part of the test suite.
    running OpenPoke:
 
    ```bash
-   curl -X POST http://127.0.0.1:8001/api/v1/gmail/push/watch
+   curl -H "Authorization: Bearer $OPENPOKE_OWNER_TOKEN" -X POST http://127.0.0.1:8001/api/v1/gmail/push/watch
    ```
 
 ## Delivery semantics
@@ -53,4 +52,4 @@ call is part of the test suite.
   so overlapping history pages and Pub/Sub retries do not surface the same reply twice.
 - Only replies on threads owned by the execution-agent registry are dispatched by this fast path.
   Sent-only mail, foreign-account notifications, malformed envelopes, empty or nonpositive history
-  ids, and wrong shared-secret requests are ignored or rejected before any Gmail read.
+  ids, missing shared-secret configuration, and wrong shared-secret requests are ignored or rejected before any Gmail read.

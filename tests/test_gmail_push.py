@@ -332,15 +332,15 @@ def test_push_routes_ack_owned_notification_and_expose_watch_registration(tmp_pa
     service.store.set_history(10, ME)
     monkeypatch.setattr(push_mod, "_service", service)
     from server.app import app
-    override_route_settings(app, gmail_push_topic="projects/p/topics/openpoke-gmail", gmail_push_shared_secret=None)
+    override_route_settings(app, gmail_push_topic="projects/p/topics/openpoke-gmail", gmail_push_shared_secret="correct")
     client = TestClient(app)
-    response = client.post("/api/v1/gmail/push", json=envelope(20))
+    response = client.post("/api/v1/gmail/push?token=correct", json=envelope(20))
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
     assert len(dispatched) == 1
-    invalid = client.post("/api/v1/gmail/push", json={"message": {"data": "bad"}})
+    invalid = client.post("/api/v1/gmail/push?token=correct", json={"message": {"data": "bad"}})
     assert invalid.status_code == 200 and invalid.json()["status"] == "invalid"
-    watch = client.post("/api/v1/gmail/push/watch")
+    watch = client.post("/api/v1/gmail/push/watch", headers={"Authorization": "Bearer offline-test-owner-token"})
     assert watch.status_code == 200 and watch.json()["action"] == "registered"
     monkeypatch.setattr(push_mod, "_service", None)
     app.dependency_overrides.clear()
@@ -383,6 +383,22 @@ def test_push_endpoint_enforces_optional_shared_secret(tmp_path, monkeypatch):
         assert client.post("/api/v1/gmail/push", json=envelope(20)).status_code == 401
         assert client.post("/api/v1/gmail/push?token=wrong", json=envelope(20)).status_code == 401
         assert client.post("/api/v1/gmail/push?token=correct", json=envelope(20)).status_code == 200
+    finally:
+        monkeypatch.setattr(push_mod, "_service", None)
+        app.dependency_overrides.clear()
+
+
+def test_push_endpoint_fails_closed_without_shared_secret(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import server.services.gmail.push as push_mod
+
+    service, _, _ = make_service(tmp_path)
+    monkeypatch.setattr(push_mod, "_service", service)
+    from server.app import app
+    override_route_settings(app, gmail_push_topic="projects/p/topics/openpoke-gmail", gmail_push_shared_secret=None)
+    try:
+        client = TestClient(app)
+        assert client.post("/api/v1/gmail/push", json=envelope(20)).status_code == 503
     finally:
         monkeypatch.setattr(push_mod, "_service", None)
         app.dependency_overrides.clear()
