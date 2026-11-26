@@ -243,6 +243,36 @@ def test_stale_one_shot_worker_cannot_complete_or_fail_over_a_newer_claim(tmp_pa
     assert stored.lease_token == second.lease_token
 
 
+def test_stale_one_shot_execution_is_not_started(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    trigger = _due_trigger(service)
+    now = datetime.now(timezone.utc)
+    first = service.claim_due_triggers(before=now)[0]
+    expired = to_storage_timestamp(now - timedelta(seconds=1))
+    service._store.update(trigger.id, trigger.agent_name, {"lease_until": expired})
+    second = service.claim_due_triggers(before=now)[0]
+    assert second.lease_token != first.lease_token
+    calls = []
+
+    class FastExecutionBatchManager:
+        async def execute_agent(self, agent_name, instructions):
+            calls.append(agent_name)
+            return ExecutionResult(agent_name=agent_name, success=True, response="done")
+
+    monkeypatch.setattr(scheduler_mod, "ExecutionBatchManager", FastExecutionBatchManager)
+
+    async def run():
+        scheduler = TriggerScheduler(lease_seconds=1, heartbeat_interval_seconds=10)
+        scheduler._service = service
+        await scheduler._execute_trigger(first)
+
+    asyncio.run(run())
+
+    assert calls == []
+    stored = service._store.fetch_one(trigger.id, trigger.agent_name)
+    assert stored is not None and stored.lease_token == second.lease_token
+
+
 def test_renewal_loss_cancels_slow_execution_before_completion(tmp_path, monkeypatch):
     service = _service(tmp_path)
     trigger = _due_trigger(service)
@@ -271,9 +301,10 @@ def test_renewal_loss_cancels_slow_execution_before_completion(tmp_path, monkeyp
         def expire_then_lose(record, lease_seconds):
             nonlocal calls
             calls += 1
-            expired = to_storage_timestamp(datetime.now(timezone.utc) - timedelta(seconds=1))
-            service._store.update(record.id, record.agent_name, {"lease_until": expired})
-            service.claim_due_triggers(before=datetime.now(timezone.utc))
+            if calls > 1:
+                expired = to_storage_timestamp(datetime.now(timezone.utc) - timedelta(seconds=1))
+                service._store.update(record.id, record.agent_name, {"lease_until": expired})
+                service.claim_due_triggers(before=datetime.now(timezone.utc))
             return original_renew(record, lease_seconds=lease_seconds)
 
         monkeypatch.setattr(service, "renew_lease", expire_then_lose)
@@ -281,7 +312,7 @@ def test_renewal_loss_cancels_slow_execution_before_completion(tmp_path, monkeyp
         await asyncio.wait_for(started.wait(), timeout=1)
         await asyncio.wait_for(finished.wait(), timeout=1)
         await asyncio.wait_for(task, timeout=1)
-        assert calls == 1
+        assert calls == 2
 
     asyncio.run(run())
 

@@ -92,6 +92,8 @@ class TriggerScheduler:
             fired_at = _utc_now()
             instructions = self._format_instructions(trigger, fired_at)
             running_trigger = self._service.prepare_for_execution(trigger, fired_at=fired_at)
+            if not self._service.renew_lease(running_trigger, lease_seconds=self._lease_seconds):
+                raise TriggerLeaseLostError(f"trigger {trigger.id} lease is no longer current")
             logger.info(
                 "Dispatching trigger",
                 extra={
