@@ -42,7 +42,9 @@ async def run_external(setups, client, out: Path, concurrency: int = 10, limit: 
             except Exception as exc:  # one bad turn must not sink the run
                 row = {"setup": setup.name, "model": client.model, "size": world.size, "scenario_id": scenario.id,
                        "family": scenario.family, "rep": 0, "gold_kind": scenario.gold.kind, "outcome": "error",
-                       "error": str(exc)[:300], "prompt_tokens": 0, "cost_usd": 0.0, "latency_s": 0.0}
+                       "error": str(exc)[:300], "prompt_tokens": 0, "completion_tokens": 0, "uncached_prompt_tokens": 0,
+                       "cached_prompt_tokens": 0, "cache_creation_prompt_tokens": 0, "cache_cost_unknown": False,
+                       "cost_usd": 0.0, "latency_s": 0.0}
             row["source"] = source
             async with lock:
                 rows.append(row)
