@@ -100,6 +100,8 @@ class LLMResult:
     completion_tokens: int
     cost_usd: float
     latency_s: float
+    cached_prompt_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 class _PooledTransport:
@@ -188,15 +190,25 @@ class LLMClient:
             latency = time.perf_counter() - started
             if status == 200 and body.get("choices"):
                 usage = body.get("usage") or {}
-                prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                completion_tokens = int(usage.get("completion_tokens") or 0)
+                prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+                completion_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+                details = usage.get("prompt_tokens_details") or usage.get("input_token_details") or {}
+                cached_tokens = int(
+                    details.get("cached_tokens")
+                    or usage.get("cached_prompt_tokens")
+                    or usage.get("cache_read_input_tokens")
+                    or 0
+                )
+                creation_tokens = int(
+                    usage.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens") or 0
+                )
                 cost = usage.get("cost")
                 if cost is None:
                     price = self.pricing.get(self.model)
                     cost = prompt_tokens * price.prompt + completion_tokens * price.completion
                 self.budget.charge(float(cost))
                 return LLMResult(body["choices"][0].get("message") or {}, prompt_tokens, completion_tokens,
-                                 float(cost), latency)
+                                 float(cost), latency, cached_tokens, creation_tokens)
             text = json.dumps(body)[:400]
             if status == 402 or "insufficient_quota" in text or "credits" in text.lower() and status in (402, 403):
                 raise BudgetExceeded(f"{self.provider} credit exhausted: {text}")
