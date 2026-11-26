@@ -41,6 +41,12 @@ call is part of the test suite.
    curl -H "Authorization: Bearer $OPENPOKE_OWNER_TOKEN" -X POST http://127.0.0.1:8001/api/v1/gmail/push/watch
    ```
 
+## Multi-tenant mode
+
+Gmail push is owner-global in this change. When `OPENPOKE_MULTI_TENANT=1`, the push endpoints
+return 503 and the automatic watch renewer stays stopped with the other global Gmail services.
+Do not expose the push endpoint in multi-tenant mode until tenant-aware Gmail ownership exists.
+
 ## Delivery semantics
 
 - The first notification seeds Gmail's current history id; OpenPoke does not replay old inbox mail.

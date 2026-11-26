@@ -11,6 +11,7 @@ from ..config import Settings, get_settings
 from ..models import GmailConnectPayload, GmailDisconnectPayload, GmailStatusPayload
 from ..services import disconnect_account, fetch_status, initiate_connect
 from ..services.gmail.push import get_gmail_push_service
+from ..services.tenancy import multi_tenant_enabled
 
 router = APIRouter(prefix="/gmail", tags=["gmail"])
 
@@ -40,6 +41,8 @@ async def gmail_pubsub_push(
     token: Optional[str] = Query(default=None),
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    if multi_tenant_enabled():
+        raise HTTPException(status_code=503, detail="Gmail push is unavailable in multi-tenant mode")
     if not settings.gmail_push_topic:
         raise HTTPException(status_code=503, detail="OPENPOKE_GMAIL_PUBSUB_TOPIC is not configured")
     expected = settings.gmail_push_shared_secret
@@ -59,6 +62,8 @@ async def gmail_pubsub_push(
 @router.post("/push/watch")
 # Register or renew Gmail's seven-day watch on the configured Pub/Sub topic.
 async def gmail_push_watch(settings: Settings = Depends(get_settings)) -> dict:
+    if multi_tenant_enabled():
+        raise HTTPException(status_code=503, detail="Gmail push is unavailable in multi-tenant mode")
     if not settings.gmail_push_topic:
         raise HTTPException(status_code=400, detail="OPENPOKE_GMAIL_PUBSUB_TOPIC is not configured")
     try:

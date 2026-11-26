@@ -346,6 +346,32 @@ def test_push_routes_ack_owned_notification_and_expose_watch_registration(tmp_pa
     app.dependency_overrides.clear()
 
 
+def test_push_routes_fail_closed_in_multi_tenant_mode(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import server.services.gmail.push as push_mod
+
+    service, _, dispatched = make_service(tmp_path)
+    monkeypatch.setattr(push_mod, "_service", service)
+    monkeypatch.setenv("OPENPOKE_MULTI_TENANT", "1")
+    monkeypatch.setenv("OPENPOKE_DATA_DIR", str(tmp_path / "tenant-data"))
+    from server.app import app
+    override_route_settings(app, gmail_push_topic="projects/p/topics/openpoke-gmail", gmail_push_shared_secret="correct")
+    try:
+        client = TestClient(app)
+        headers = {"X-Openpoke-Tenant": "alice"}
+        response = client.post("/api/v1/gmail/push?token=correct", json=envelope(20), headers=headers)
+        assert response.status_code == 503
+        watch = client.post(
+            "/api/v1/gmail/push/watch",
+            headers={**headers, "Authorization": "Bearer offline-test-owner-token"},
+        )
+        assert watch.status_code == 503
+        assert dispatched == []
+    finally:
+        monkeypatch.setattr(push_mod, "_service", None)
+        app.dependency_overrides.clear()
+
+
 def test_composio_gateway_uses_query_typed_proxy_parameters(monkeypatch):
     from server.services.gmail.push import ComposioGmailProxyGateway
     import server.services.gmail.client as client_mod

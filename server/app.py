@@ -98,7 +98,7 @@ app.include_router(api_router)
 async def _start_trigger_scheduler() -> None:
     ensure_owner_token(get_settings())
     if multi_tenant_enabled():
-        logger.info("multi-tenant storage enabled; global scheduler and Gmail watcher stay stopped until tenant-aware runners are configured")
+        logger.info("multi-tenant storage enabled; global scheduler, Gmail watcher and Gmail push renewal stay stopped until tenant-aware runners are configured")
         return
     scheduler = get_trigger_scheduler()
     await scheduler.start()
