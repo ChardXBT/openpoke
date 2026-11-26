@@ -40,7 +40,7 @@ The following singleton storage factories are tenant-aware caches keyed by rando
 
 Numeric agent ids and trigger ids remain local to a tenant database. They are not global handles and must never be exposed across tenant boundaries.
 
-Gmail account activation is scoped by tenant namespace. Without a tenant context there is no active Gmail account, so execution code fails closed instead of using whichever account connected last. Execution batching and per-agent locks are also keyed by tenant namespace, so same-named agents in concurrent tenants do not share a result batch or serialize through one global lock.
+Gmail account activation is scoped by tenant namespace. Without a tenant context there is no active Gmail account, so execution code fails closed instead of using whichever account connected last. Execution batching and per-agent locks are also keyed by tenant namespace, so same-named agents in concurrent tenants do not share a result batch or serialize through one global lock. Important-email watcher instances are keyed the same way when one is invoked explicitly, and conversation summarization workers are keyed by tenant so a background pass keeps the context that scheduled it.
 
 ## Explicitly not done yet
 

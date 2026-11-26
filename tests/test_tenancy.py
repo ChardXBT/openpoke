@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import threading
 
@@ -343,6 +344,48 @@ def test_execution_batches_and_agent_locks_are_tenant_scoped(tmp_path, monkeypat
     assert sent == ["[SUCCESS] shared-agent: alpha done", "[SUCCESS] shared-agent: beta done"]
 
 
+def test_importance_watcher_instances_are_tenant_scoped(tmp_path, monkeypatch):
+    enable(tmp_path)
+    provision_tenant("alice")
+    provision_tenant("bob")
+    import server.services.gmail.importance_watcher as watcher_module
+
+    monkeypatch.setattr(watcher_module, "_watcher_instance", None, raising=False)
+    monkeypatch.setattr(watcher_module, "_tenant_watchers", {}, raising=False)
+    with tenant_context("alice"):
+        alice_watcher = watcher_module.get_important_email_watcher()
+    with tenant_context("bob"):
+        bob_watcher = watcher_module.get_important_email_watcher()
+    assert alice_watcher is not bob_watcher
+    assert alice_watcher._seen_store is not bob_watcher._seen_store
+
+
+def test_summarization_workers_keep_their_own_tenant_context(tmp_path, monkeypatch):
+    enable(tmp_path)
+    alice_namespace = provision_tenant("alice")
+    bob_namespace = provision_tenant("bob")
+    from server.services.conversation.summarization import scheduler
+
+    calls = []
+
+    async def fake_summarize():
+        calls.append(current_namespace())
+
+    monkeypatch.setattr(scheduler, "summarize_conversation", fake_summarize)
+    monkeypatch.setattr(scheduler, "_pending", set())
+    monkeypatch.setattr(scheduler, "_running", set())
+
+    async def run():
+        with tenant_context("alice"):
+            scheduler.schedule_summarization()
+        with tenant_context("bob"):
+            scheduler.schedule_summarization()
+        await asyncio.sleep(0.1)
+
+    asyncio.run(run())
+    assert set(calls) == {alice_namespace, bob_namespace}
+
+
 def test_tenant_named_default_uses_a_tenant_namespace_not_legacy_files(tmp_path):
     enable(tmp_path)
     provision_tenant("default")
@@ -392,6 +435,19 @@ def test_registry_active_retired_overlap_fails_closed(tmp_path):
     )
     with pytest.raises(TenantError):
         provision_tenant("alice")
+
+
+def test_registry_reused_namespace_fails_closed(tmp_path):
+    enable(tmp_path)
+    registry = tmp_path / "tenants" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    namespace = "0123456789abcdef0123456789abcdef"
+    registry.write_text(
+        json.dumps({"active": {"alice": namespace, "bob": namespace}, "retired": {}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(TenantError):
+        tenant_context("alice").__enter__()
 
 
 def test_concurrent_provisioning_of_same_tenant_returns_one_namespace(tmp_path):

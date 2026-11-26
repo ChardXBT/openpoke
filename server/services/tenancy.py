@@ -74,6 +74,7 @@ def _load(root: Optional[Path] = None) -> dict:
         raise TenantError("tenant registry is unreadable; refusing storage access") from exc
     if not isinstance(data, dict) or not isinstance(data.get("active"), dict) or not isinstance(data.get("retired"), dict):
         raise TenantError("tenant registry is corrupt; refusing storage access")
+    namespaces = []
     for section in ("active", "retired"):
         for public, namespace in data[section].items():
             try:
@@ -82,6 +83,9 @@ def _load(root: Optional[Path] = None) -> dict:
                 raise TenantError("tenant registry is corrupt; refusing storage access") from exc
             if not isinstance(namespace, str) or not _NAMESPACE.fullmatch(namespace):
                 raise TenantError("tenant registry is corrupt; refusing storage access")
+            namespaces.append(namespace)
+    if len(namespaces) != len(set(namespaces)):
+        raise TenantError("tenant registry is corrupt; refusing storage access")
     if set(data["active"]) & set(data["retired"]):
         raise TenantError("tenant registry is corrupt; refusing storage access")
     return data

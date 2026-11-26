@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, TYPE_CHECKING
 
+from ..tenancy import current_namespace, multi_tenant_enabled
 from .client import execute_gmail_tool, get_active_gmail_user_id
 from .processing import EmailTextCleaner, ProcessedEmail, parse_gmail_fetch_response
 from .seen_store import GmailSeenStore, get_gmail_seen_store
@@ -252,13 +254,21 @@ class ImportantEmailWatcher:
 
 
 _watcher_instance: Optional[ImportantEmailWatcher] = None
+_tenant_watchers: dict[str, ImportantEmailWatcher] = {}
+_watcher_lock = threading.Lock()
 
 
 def get_important_email_watcher() -> ImportantEmailWatcher:
     global _watcher_instance
-    if _watcher_instance is None:
-        _watcher_instance = ImportantEmailWatcher()
-    return _watcher_instance
+    with _watcher_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_watchers:
+                _tenant_watchers[namespace] = ImportantEmailWatcher()
+            return _tenant_watchers[namespace]
+        if _watcher_instance is None:
+            _watcher_instance = ImportantEmailWatcher()
+        return _watcher_instance
 
 
 __all__ = ["ImportantEmailWatcher", "get_important_email_watcher"]
