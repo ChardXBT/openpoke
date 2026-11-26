@@ -8,12 +8,13 @@ collapsed so one contact cannot fill the list.
 
 from __future__ import annotations
 
+import heapq
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from .embeddings import Embedder, cached_embeddings, openai_embedder
+from .embeddings import Embedder, EmbeddingStore, openai_embedder, prepare_embeddings
 from .registry import AgentRecord, AgentRegistry, normalize_ref, parse_iso
 from ...logging_config import logger
 
@@ -129,17 +130,28 @@ def _semantic_scores(
             " ".join(part for part in [row["name"], row["topic"], row["state_note"], " ".join(refs.get(int(row["id"]), []))] if part)
             for row in rows
         ]
-        vectors = cached_embeddings([query, *cards], embedder)
-        if len(vectors) != len(cards) + 1:
-            return {}
-        matrix = np.asarray(vectors[1:], dtype=np.float32)
-        query_vector = np.asarray(vectors[0], dtype=np.float32)
-        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-        matrix /= np.where(norms == 0, 1.0, norms)
+        store = EmbeddingStore()
+        digests = prepare_embeddings([query, *cards], embedder, store)
+        query_vector = np.asarray(next(store.vectors_for([digests[0]], batch_size=1))[0], dtype=np.float32)
         query_norm = float(np.linalg.norm(query_vector)) or 1.0
-        similarities = matrix @ (query_vector / query_norm)
-        order = np.argsort(-similarities)[:limit]
-        return {ids[int(index)]: float(similarities[int(index)]) for index in order if float(similarities[int(index)]) > 0.0}
+        query_unit = query_vector / query_norm
+
+        def positive_scores():
+            position = 0
+            for batch in store.vectors_for(digests[1:]):
+                matrix = np.asarray(batch, dtype=np.float32)
+                if matrix.ndim != 2 or matrix.shape[1] != query_vector.shape[0]:
+                    raise ValueError("cached vectors do not all have the same dimensions")
+                norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+                matrix = matrix / np.where(norms == 0, 1.0, norms)
+                similarities = matrix @ query_unit
+                for offset, similarity in enumerate(similarities):
+                    value = float(similarity)
+                    if value > 0.0:
+                        yield (value, ids[position + offset])
+                position += len(batch)
+
+        return {agent_id: score for score, agent_id in heapq.nlargest(limit, positive_scores())}
     except Exception as exc:  # embeddings are optional recall; lexical search must never break
         logger.debug(f"agent semantic search skipped: {exc}")
         return {}

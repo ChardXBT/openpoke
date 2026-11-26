@@ -129,7 +129,7 @@ def test_optional_embeddings_add_paraphrase_recall_and_cache_vectors(reg, tmp_pa
     ids = _ids(search_agents(reg, query, now=NOW, embedder=fake_embedder))
     assert ids[0] == 40
     first_call_count = len(calls)
-    assert first_call_count > 0 and len(list((tmp_path / "vectors").glob("*.json"))) > 0
+    assert first_call_count > 0 and (tmp_path / "vectors" / "embeddings.sqlite3").is_file()
 
     ids = _ids(search_agents(reg, query, now=NOW, embedder=fake_embedder))
     assert ids[0] == 40
