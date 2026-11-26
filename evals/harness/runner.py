@@ -151,7 +151,9 @@ async def run_turn(setup: Setup, world: World, scenario: Scenario, client, rep: 
         "scenario_id": scenario.id, "family": scenario.family, "rep": rep,
         "gold_kind": scenario.gold.kind, "gold_agent": scenario.gold.agent_id,
         "irreversible": scenario.irreversible,
-        "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "latency_s": 0.0,
+        "prompt_tokens": 0, "completion_tokens": 0, "uncached_prompt_tokens": 0,
+        "cached_prompt_tokens": 0, "cache_creation_prompt_tokens": 0, "cache_cost_unknown": False,
+        "cost_usd": 0.0, "latency_s": 0.0,
     }
     prepared = setup.prepare(world, scenario, workdir)
     base["prompt_chars"] = prepared.prompt_chars
@@ -168,6 +170,10 @@ async def run_turn(setup: Setup, world: World, scenario: Scenario, client, rep: 
         res = await client.complete(prepared.system_prompt, messages, prepared.tools)
         base["prompt_tokens"] += res.prompt_tokens
         base["completion_tokens"] += res.completion_tokens
+        base["uncached_prompt_tokens"] += res.uncached_prompt_tokens
+        base["cached_prompt_tokens"] += res.cached_prompt_tokens
+        base["cache_creation_prompt_tokens"] += res.cache_creation_prompt_tokens
+        base["cache_cost_unknown"] = base["cache_cost_unknown"] or res.cache_cost_unknown
         base["cost_usd"] += res.cost_usd
         base["latency_s"] += res.latency_s
         msg = res.message or {}
@@ -264,7 +270,9 @@ async def run(
                 row = {"setup": setup.name, "model": client.model, "split": split, "size": world.size,
                        "scenario_id": scenario.id, "family": scenario.family, "rep": rep,
                        "gold_kind": scenario.gold.kind, "outcome": "error", "error": str(exc)[:500],
-                       "prompt_tokens": 0, "cost_usd": 0.0, "latency_s": 0.0}
+                       "prompt_tokens": 0, "completion_tokens": 0, "uncached_prompt_tokens": 0,
+                       "cached_prompt_tokens": 0, "cache_creation_prompt_tokens": 0, "cache_cost_unknown": False,
+                       "cost_usd": 0.0, "latency_s": 0.0}
             async with lock:
                 rows.append(row)
                 with rows_path.open("a", encoding="utf-8") as fh:

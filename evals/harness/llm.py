@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import threading
 import time
@@ -28,6 +29,26 @@ MODELS_CACHE = Path(__file__).resolve().parents[1] / ".cache" / "models.json"
 RUNS_DIR = Path(__file__).resolve().parents[1] / "runs"
 
 Transport = Callable[[str, dict, dict], Awaitable[tuple[int, dict]]]
+
+
+def _nonnegative_int(value) -> int:
+    """Usage counter as an int; malformed, negative and non-finite values count as zero."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(number) or number <= 0:
+        return 0
+    return int(number)
+
+
+def _valid_reported_cost(value) -> float | None:
+    """Provider-reported cost only when it is finite and non-negative."""
+    try:
+        cost = float(value)
+    except (TypeError, ValueError):
+        return None
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
 
 class BudgetExceeded(RuntimeError):
@@ -72,9 +93,11 @@ class Budget:
 
 @dataclass
 class Price:
-    prompt: float  # USD per token
+    prompt: float  # USD per uncached prompt token
     completion: float
     context: int
+    cache_read: float | None = None   # None: provider price unknown; conservative fallback uses prompt
+    cache_write: float | None = None
 
 
 class Pricing:
@@ -84,8 +107,16 @@ class Pricing:
             data = json.loads(path.read_text(encoding="utf-8")).get("data", [])
             for model in data:
                 p = model.get("pricing") or {}
+                def cache_price(*names: str) -> float | None:
+                    for name in names:
+                        if p.get(name) not in (None, ""):
+                            return float(p[name])
+                    return None
+
                 self._prices[model["id"]] = Price(
-                    float(p.get("prompt") or 0), float(p.get("completion") or 0), int(model.get("context_length") or 0)
+                    float(p.get("prompt") or 0), float(p.get("completion") or 0), int(model.get("context_length") or 0),
+                    cache_price("input_cache_read", "prompt_cache_read", "cached_prompt"),
+                    cache_price("input_cache_write", "prompt_cache_write", "cache_creation"),
                 )
 
     def get(self, model: str) -> Price:
@@ -100,6 +131,10 @@ class LLMResult:
     completion_tokens: int
     cost_usd: float
     latency_s: float
+    uncached_prompt_tokens: int = 0
+    cached_prompt_tokens: int = 0
+    cache_creation_prompt_tokens: int = 0
+    cache_cost_unknown: bool = False
 
 
 class _PooledTransport:
@@ -188,15 +223,39 @@ class LLMClient:
             latency = time.perf_counter() - started
             if status == 200 and body.get("choices"):
                 usage = body.get("usage") or {}
-                prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                completion_tokens = int(usage.get("completion_tokens") or 0)
-                cost = usage.get("cost")
+                prompt_tokens = _nonnegative_int(usage.get("prompt_tokens"))
+                completion_tokens = _nonnegative_int(usage.get("completion_tokens"))
+                raw_details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+                details = raw_details if isinstance(raw_details, dict) else {}
+
+                def usage_count(*names: str) -> int:
+                    for source in (details, usage):
+                        for name in names:
+                            value = source.get(name)
+                            if isinstance(value, (int, float)):
+                                return _nonnegative_int(value)
+                    return 0
+
+                cached = usage_count("cached_tokens", "cache_read_input_tokens", "prompt_cache_read_tokens")
+                created = usage_count("cache_creation_input_tokens", "prompt_cache_creation_tokens")
+                inconsistent_cache_totals = cached + created > prompt_tokens
+                if inconsistent_cache_totals:
+                    # Inconsistent usage is not a licence to undercharge: price every prompt token uncached.
+                    cached = created = 0
+                uncached = prompt_tokens - cached - created
+                cost = _valid_reported_cost(usage.get("cost"))
+                cache_unknown = False
                 if cost is None:
                     price = self.pricing.get(self.model)
-                    cost = prompt_tokens * price.prompt + completion_tokens * price.completion
+                    read_price = price.cache_read if price.cache_read is not None else price.prompt
+                    write_price = price.cache_write if price.cache_write is not None else price.prompt
+                    cache_unknown = (inconsistent_cache_totals or (cached > 0 and price.cache_read is None)
+                                     or (created > 0 and price.cache_write is None))
+                    cost = (uncached * price.prompt + cached * read_price + created * write_price
+                            + completion_tokens * price.completion)
                 self.budget.charge(float(cost))
                 return LLMResult(body["choices"][0].get("message") or {}, prompt_tokens, completion_tokens,
-                                 float(cost), latency)
+                                 float(cost), latency, uncached, cached, created, cache_unknown)
             text = json.dumps(body)[:400]
             if status == 402 or "insufficient_quota" in text or "credits" in text.lower() and status in (402, 403):
                 raise BudgetExceeded(f"{self.provider} credit exhausted: {text}")
