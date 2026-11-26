@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
+from ..tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
+
 KINDS = ("person", "preference", "place", "routine", "fact")
 ALWAYS_SHOWN = ("preference", "routine")
 MAX_VALUE = 300
@@ -242,8 +244,12 @@ class ProfileStore:
         return "\n".join(lines) if lines else "None"
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+def _data_dir() -> Path:
+    return scoped_data_dir(data_root())
+
+
 _store: Optional[ProfileStore] = None
+_tenant_stores: dict[str, ProfileStore] = {}
 _store_lock = threading.Lock()
 _override: ContextVar[Optional[ProfileStore]] = ContextVar("openpoke_profile_override", default=None)
 
@@ -254,8 +260,13 @@ def get_profile_store() -> ProfileStore:
     if override is not None:
         return override
     with _store_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_stores:
+                _tenant_stores[namespace] = ProfileStore(_data_dir() / "profile.db")
+            return _tenant_stores[namespace]
         if _store is None:
-            _store = ProfileStore(_DATA_DIR / "profile.db")
+            _store = ProfileStore(_data_dir() / "profile.db")
         return _store
 
 

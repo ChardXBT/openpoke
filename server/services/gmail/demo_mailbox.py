@@ -14,6 +14,8 @@ import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from ..tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
 from typing import Any, Optional
 
 ME = "you@demo.local"
@@ -223,14 +225,23 @@ class DemoMailbox:
         return {"successful": True, "data": {"emailAddress": self._state.get("me", ME), "messagesTotal": len(self._state["messages"])}}
 
 
-_DATA = Path(__file__).resolve().parent.parent.parent / "data" / "demo_mailbox.json"
+def _mailbox_path() -> Path:
+    return scoped_data_dir(data_root()) / "demo_mailbox.json"
+
+
 _mailbox: Optional[DemoMailbox] = None
+_tenant_mailboxes: dict[str, DemoMailbox] = {}
 _lock = threading.Lock()
 
 
 def get_demo_mailbox() -> DemoMailbox:
     global _mailbox
     with _lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_mailboxes:
+                _tenant_mailboxes[namespace] = DemoMailbox(_mailbox_path())
+            return _tenant_mailboxes[namespace]
         if _mailbox is None:
-            _mailbox = DemoMailbox(_DATA)
+            _mailbox = DemoMailbox(_mailbox_path())
         return _mailbox

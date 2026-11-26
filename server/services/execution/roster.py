@@ -1,10 +1,12 @@
 """Simple agent roster management - just a list of agent names."""
 
 import json
+import threading
 import time
 from pathlib import Path
 
 from ...logging_config import logger
+from ..tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
 
 try:  # POSIX
     import fcntl
@@ -113,12 +115,23 @@ class AgentRoster:
             logger.warning(f"Failed to clear roster.json: {exc}")
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_ROSTER_PATH = _DATA_DIR / "execution_agents" / "roster.json"
+def _roster_path() -> Path:
+    return scoped_data_dir(data_root()) / "execution_agents" / "roster.json"
 
-_agent_roster = AgentRoster(_ROSTER_PATH)
+_agent_roster = None
+_tenant_rosters = {}
+_roster_lock = threading.Lock()
 
 
 def get_agent_roster() -> AgentRoster:
-    """Get the singleton roster instance."""
-    return _agent_roster
+    """Get the current tenant roster (or the single-user roster when the flag is off)."""
+    global _agent_roster
+    with _roster_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_rosters:
+                _tenant_rosters[namespace] = AgentRoster(_roster_path())
+            return _tenant_rosters[namespace]
+        if _agent_roster is None:
+            _agent_roster = AgentRoster(_roster_path())
+        return _agent_roster

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Protocol, Tuple
 
 from ...config import get_settings
+from ..tenancy import current_namespace, data_root, multi_tenant_enabled, scoped_data_dir
 from ...logging_config import logger
 from ...models import ChatMessage
 from ...utils.timezones import now_in_user_timezone
@@ -16,8 +17,8 @@ if TYPE_CHECKING:  # pragma: no cover - used for type checkers only
     from .summarization import WorkingMemoryLog
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_CONVERSATION_LOG_PATH = _DATA_DIR / "conversation" / "poke_conversation.log"
+def _conversation_log_path() -> Path:
+    return scoped_data_dir(data_root()) / "conversation" / "poke_conversation.log"
 
 
 class TranscriptFormatter(Protocol):
@@ -211,11 +212,22 @@ class ConversationLog:
             )
 
 
-_conversation_log = ConversationLog(_CONVERSATION_LOG_PATH)
+_conversation_log: Optional[ConversationLog] = None
+_tenant_conversation_logs: dict[str, ConversationLog] = {}
+_conversation_lock = threading.Lock()
 
 
 def get_conversation_log() -> ConversationLog:
-    return _conversation_log
+    global _conversation_log
+    with _conversation_lock:
+        if multi_tenant_enabled():
+            namespace = current_namespace()
+            if namespace not in _tenant_conversation_logs:
+                _tenant_conversation_logs[namespace] = ConversationLog(_conversation_log_path())
+            return _tenant_conversation_logs[namespace]
+        if _conversation_log is None:
+            _conversation_log = ConversationLog(_conversation_log_path())
+        return _conversation_log
 
 
 __all__ = ["ConversationLog", "get_conversation_log"]
