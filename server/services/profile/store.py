@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
+from ..tenancy import cached_tenant_store
+
 KINDS = ("person", "preference", "place", "routine", "fact")
 ALWAYS_SHOWN = ("preference", "routine")
 MAX_VALUE = 300
@@ -245,18 +247,34 @@ class ProfileStore:
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 _store: Optional[ProfileStore] = None
 _store_lock = threading.Lock()
+_store_cache: dict[str, ProfileStore] = {}
 _override: ContextVar[Optional[ProfileStore]] = ContextVar("openpoke_profile_override", default=None)
 
 
 def get_profile_store() -> ProfileStore:
-    global _store
     override = _override.get()
     if override is not None:
         return override
-    with _store_lock:
-        if _store is None:
-            _store = ProfileStore(_DATA_DIR / "profile.db")
-        return _store
+
+    def legacy() -> ProfileStore:
+        return ProfileStore(_DATA_DIR / "profile.db")
+
+    def tenant(root: Path) -> ProfileStore:
+        return ProfileStore(root / "profile.db")
+
+    def set_legacy(instance: ProfileStore) -> None:
+        global _store
+        _store = instance
+
+    return cached_tenant_store(
+        cache=_store_cache,
+        lock=_store_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DATA_DIR,
+        set_legacy=set_legacy,
+    )
 
 
 @contextmanager

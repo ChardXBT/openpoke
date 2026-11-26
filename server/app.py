@@ -11,6 +11,7 @@ from .config import get_settings
 from .logging_config import configure_logging, logger
 from .routes import api_router
 from .services import get_important_email_watcher, get_trigger_scheduler
+from .services.tenancy import TenantResolutionError, multi_tenant_storage_enabled, use_tenant, validate_tenant_id
 
 
 # Register global exception handlers for consistent error responses across the API
@@ -61,6 +62,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def tenant_storage_context(request: Request, call_next):
+    """Bind experimental storage to the request tenant; fail closed when absent."""
+    if not multi_tenant_storage_enabled():
+        return await call_next(request)
+    try:
+        tenant = validate_tenant_id(request.headers.get("x-openpoke-tenant"))
+    except TenantResolutionError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
+    with use_tenant(tenant):
+        return await call_next(request)
+
 register_exception_handlers(app)
 app.include_router(api_router)
 
@@ -68,6 +82,9 @@ app.include_router(api_router)
 @app.on_event("startup")
 # Initialize background services (trigger scheduler and email watcher) when the app starts
 async def _start_trigger_scheduler() -> None:
+    if multi_tenant_storage_enabled():
+        logger.warning("multi-tenant storage is experimental; legacy background loops are disabled")
+        return
     scheduler = get_trigger_scheduler()
     await scheduler.start()
     watcher = get_important_email_watcher()
@@ -77,6 +94,8 @@ async def _start_trigger_scheduler() -> None:
 @app.on_event("shutdown")
 # Gracefully shutdown background services when the app stops
 async def _stop_trigger_scheduler() -> None:
+    if multi_tenant_storage_enabled():
+        return
     scheduler = get_trigger_scheduler()
     await scheduler.stop()
     watcher = get_important_email_watcher()

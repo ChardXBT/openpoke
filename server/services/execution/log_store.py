@@ -10,6 +10,7 @@ from typing import Dict, Iterator, List, Optional, Tuple
 
 from ...logging_config import logger
 from ...utils.timezones import now_in_user_timezone
+from ..tenancy import cached_tenant_store
 
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -176,9 +177,30 @@ class ExecutionAgentLogStore:
             logger.error(f"Failed to clear execution logs: {exc}")
 
 
-_execution_agent_logs = ExecutionAgentLogStore(_EXECUTION_LOG_DIR)
+_execution_agent_logs: ExecutionAgentLogStore | None = None
+_execution_log_lock = threading.Lock()
+_execution_log_cache: dict[str, ExecutionAgentLogStore] = {}
 
 
 def get_execution_agent_logs() -> ExecutionAgentLogStore:
-    """Get the singleton log store instance."""
-    return _execution_agent_logs
+    """Get the legacy singleton or current tenant's isolated log store."""
+
+    def legacy() -> ExecutionAgentLogStore:
+        return ExecutionAgentLogStore(_EXECUTION_LOG_DIR)
+
+    def tenant(root: Path) -> ExecutionAgentLogStore:
+        return ExecutionAgentLogStore(root / "execution_agents")
+
+    def set_legacy(instance: ExecutionAgentLogStore) -> None:
+        global _execution_agent_logs
+        _execution_agent_logs = instance
+
+    return cached_tenant_store(
+        cache=_execution_log_cache,
+        lock=_execution_log_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DATA_DIR,
+        set_legacy=set_legacy,
+    )

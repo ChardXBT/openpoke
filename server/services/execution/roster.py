@@ -1,10 +1,12 @@
 """Simple agent roster management - just a list of agent names."""
 
 import json
+import threading
 import time
 from pathlib import Path
 
 from ...logging_config import logger
+from ..tenancy import cached_tenant_store
 
 try:  # POSIX
     import fcntl
@@ -116,9 +118,30 @@ class AgentRoster:
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 _ROSTER_PATH = _DATA_DIR / "execution_agents" / "roster.json"
 
-_agent_roster = AgentRoster(_ROSTER_PATH)
+_agent_roster: AgentRoster | None = None
+_roster_lock = threading.Lock()
+_roster_cache: dict[str, AgentRoster] = {}
 
 
 def get_agent_roster() -> AgentRoster:
-    """Get the singleton roster instance."""
-    return _agent_roster
+    """Get the legacy singleton or current tenant's isolated roster."""
+
+    def legacy() -> AgentRoster:
+        return AgentRoster(_ROSTER_PATH)
+
+    def tenant(root: Path) -> AgentRoster:
+        return AgentRoster(root / "execution_agents" / "roster.json")
+
+    def set_legacy(instance: AgentRoster) -> None:
+        global _agent_roster
+        _agent_roster = instance
+
+    return cached_tenant_store(
+        cache=_roster_cache,
+        lock=_roster_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DATA_DIR,
+        set_legacy=set_legacy,
+    )

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
 from ...logging_config import logger
+from ..tenancy import cached_tenant_store
 
 OPEN_EXCLUDED_STATES = ("done",)
 CASEFOLD_REF_KINDS = {"contact", "contact_name", "subject", "alias"}
@@ -475,19 +476,38 @@ _LEGACY_ROSTER = _DATA_DIR / "execution_agents" / "roster.json"
 
 _registry: Optional[AgentRegistry] = None
 _registry_lock = threading.Lock()
+_registry_cache: dict[str, AgentRegistry] = {}
 # Per-task override (evals run many isolated scenarios concurrently in one process).
 _registry_override: ContextVar[Optional[AgentRegistry]] = ContextVar("openpoke_registry_override", default=None)
 
 
 def get_agent_registry() -> AgentRegistry:
-    global _registry
     override = _registry_override.get()
     if override is not None:
         return override
-    with _registry_lock:
-        if _registry is None:
-            _registry = AgentRegistry(_DB_PATH, legacy_roster_path=_LEGACY_ROSTER)
-        return _registry
+
+    def legacy() -> AgentRegistry:
+        return AgentRegistry(_DB_PATH, legacy_roster_path=_LEGACY_ROSTER)
+
+    def tenant(root: Path) -> AgentRegistry:
+        return AgentRegistry(
+            root / "execution_agents" / "agents.db",
+            legacy_roster_path=root / "execution_agents" / "roster.json",
+        )
+
+    def set_legacy(instance: AgentRegistry) -> None:
+        global _registry
+        _registry = instance
+
+    return cached_tenant_store(
+        cache=_registry_cache,
+        lock=_registry_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DATA_DIR,
+        set_legacy=set_legacy,
+    )
 
 
 @contextmanager
@@ -505,3 +525,7 @@ def set_agent_registry(registry: Optional[AgentRegistry]) -> None:
     global _registry
     with _registry_lock:
         _registry = registry
+        if registry is None:
+            _registry_cache.pop("legacy:default", None)
+        else:
+            _registry_cache["legacy:default"] = registry

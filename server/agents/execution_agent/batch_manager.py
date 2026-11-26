@@ -15,6 +15,7 @@ from ...config import get_settings
 from ...logging_config import logger
 from ...services.execution import loops
 from ...services.execution.registry import get_agent_registry
+from ...services.tenancy import current_tenant_id, multi_tenant_storage_enabled
 
 
 _agent_locks: dict[
@@ -24,12 +25,17 @@ _agent_locks: dict[
 _agent_locks_guard = threading.Lock()
 
 
+def _batch_tenant_key() -> str:
+    return current_tenant_id() if multi_tenant_storage_enabled() else "default"
+
+
 def _get_agent_lock(agent_name: str) -> asyncio.Lock:
-    """Return the shared lock for an agent in the current event loop."""
+    """Return the shared lock for an agent in the current event loop and tenant."""
 
     loop = asyncio.get_running_loop()
+    lock_name = f"{_batch_tenant_key()}\0{agent_name}"
     with _agent_locks_guard:
-        locks_by_loop = _agent_locks.setdefault(agent_name, weakref.WeakKeyDictionary())
+        locks_by_loop = _agent_locks.setdefault(lock_name, weakref.WeakKeyDictionary())
         lock = locks_by_loop.get(loop)
         if lock is None:
             lock = asyncio.Lock()
@@ -75,7 +81,8 @@ class ExecutionBatchManager:
         self.timeout_seconds = timeout_seconds
         self._pending: Dict[str, PendingExecution] = {}
         self._batch_lock = asyncio.Lock()
-        self._batch_state: Optional[_BatchState] = None
+        self._batch_state: Optional[_BatchState] = None  # legacy single-tenant state
+        self._batch_states: dict[str, _BatchState] = {}
 
     # Run execution agent with timeout handling and batch coordination for interaction agent
     async def execute_agent(
@@ -140,13 +147,19 @@ class ExecutionBatchManager:
         """Attach a new execution to the active batch, opening one when required."""
 
         async with self._batch_lock:
-            if self._batch_state is None:
-                batch_id = str(uuid.uuid4())
-                self._batch_state = _BatchState(batch_id=batch_id)
+            tenant_key = _batch_tenant_key()
+            if multi_tenant_storage_enabled():
+                state = self._batch_states.get(tenant_key)
+                if state is None:
+                    state = _BatchState(batch_id=str(uuid.uuid4()))
+                    self._batch_states[tenant_key] = state
             else:
-                batch_id = self._batch_state.batch_id
+                if self._batch_state is None:
+                    self._batch_state = _BatchState(batch_id=str(uuid.uuid4()))
+                state = self._batch_state
+            batch_id = state.batch_id
 
-            self._batch_state.pending += 1
+            state.pending += 1
             self._pending[request_id] = PendingExecution(
                 request_id=request_id,
                 agent_name=agent_name,
@@ -168,7 +181,12 @@ class ExecutionBatchManager:
         dispatch_payload: Optional[str] = None
 
         async with self._batch_lock:
-            state = self._batch_state
+            tenant_key = _batch_tenant_key()
+            state = (
+                self._batch_states.get(tenant_key)
+                if multi_tenant_storage_enabled()
+                else self._batch_state
+            )
             if state is None or state.batch_id != batch_id:
                 logger.warning(f"[{agent_name}] Dropping result for unknown batch")
                 return
@@ -180,7 +198,10 @@ class ExecutionBatchManager:
                 dispatch_payload = self._format_batch_payload(state.results)
                 agent_names = [entry.agent_name for entry in state.results]
                 logger.info(f"Execution batch completed: {', '.join(agent_names)}")
-                self._batch_state = None
+                if multi_tenant_storage_enabled():
+                    self._batch_states.pop(tenant_key, None)
+                else:
+                    self._batch_state = None
 
         if dispatch_payload:
             await self._dispatch_to_interaction_agent(dispatch_payload)
@@ -207,6 +228,7 @@ class ExecutionBatchManager:
         self._pending.clear()
         async with self._batch_lock:
             self._batch_state = None
+            self._batch_states.clear()
 
     # Format multiple execution results into single message for interaction agent
     def _format_batch_payload(self, results: List[ExecutionResult]) -> str:
