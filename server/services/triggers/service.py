@@ -24,6 +24,10 @@ MISSED_TRIGGER_GRACE_PERIOD = timedelta(minutes=5)
 TRIGGER_LEASE_DURATION = timedelta(minutes=2)
 
 
+class TriggerLeaseLostError(RuntimeError):
+    """The worker no longer owns the trigger lease fencing token."""
+
+
 class TriggerService:
     """High-level trigger management with recurrence awareness."""
 
@@ -216,27 +220,70 @@ class TriggerService:
         }
         if next_fire is None:
             fields["status"] = "completed"
-        self._store.update(trigger.id, trigger.agent_name, fields)
-        return self._store.fetch_one(trigger.id, trigger.agent_name) or trigger
-
-    def complete_execution(self, trigger: TriggerRecord) -> None:
-        """Finish a claimed run: complete one-shots, or release a recurring lease."""
-        if trigger.recurrence_rule:
-            self._store.update_if_lease(
-                trigger.id,
-                trigger.agent_name,
-                {"lease_until": None, "last_error": None},
-                trigger.lease_until,
-            )
-        else:
-            self.mark_as_completed(trigger.id, agent_name=trigger.agent_name)
-
-    def release_lease(self, trigger: TriggerRecord) -> None:
-        self._store.update_if_lease(
+        updated = self._store.update_if_lease_token(
             trigger.id,
             trigger.agent_name,
-            {"lease_until": None},
-            trigger.lease_until,
+            fields,
+            trigger.lease_token,
+        )
+        if not updated:
+            raise TriggerLeaseLostError(f"trigger {trigger.id} lease is no longer current")
+        return self._store.fetch_one(trigger.id, trigger.agent_name) or trigger
+
+    def renew_lease(self, trigger: TriggerRecord, *, lease_seconds: int) -> bool:
+        """Extend an active lease while its fencing token remains current."""
+        lease_until = to_storage_timestamp(utc_now() + timedelta(seconds=max(1, lease_seconds)))
+        return self._store.update_if_lease_token(
+            trigger.id,
+            trigger.agent_name,
+            {"lease_until": lease_until},
+            trigger.lease_token,
+        )
+
+    def complete_execution(self, trigger: TriggerRecord) -> bool:
+        """Finish a claimed run: complete one-shots, or release a recurring lease."""
+        if trigger.recurrence_rule:
+            return self._store.update_if_lease_token(
+                trigger.id,
+                trigger.agent_name,
+                {"lease_until": None, "lease_token": None, "last_error": None},
+                trigger.lease_token,
+            )
+        return self._store.update_if_lease_token(
+            trigger.id,
+            trigger.agent_name,
+            {
+                "status": "completed",
+                "next_trigger": None,
+                "last_error": None,
+                "lease_until": None,
+                "lease_token": None,
+            },
+            trigger.lease_token,
+        )
+
+    def fail_execution(self, trigger: TriggerRecord, error: str) -> bool:
+        """Record a failed run and release it only while the fencing token is current."""
+        fields: Dict[str, Any] = {
+            "last_error": error,
+            "lease_until": None,
+            "lease_token": None,
+        }
+        if not trigger.recurrence_rule:
+            fields["next_trigger"] = None
+        return self._store.update_if_lease_token(
+            trigger.id,
+            trigger.agent_name,
+            fields,
+            trigger.lease_token,
+        )
+
+    def release_lease(self, trigger: TriggerRecord) -> bool:
+        return self._store.update_if_lease_token(
+            trigger.id,
+            trigger.agent_name,
+            {"lease_until": None, "lease_token": None},
+            trigger.lease_token,
         )
 
     def mark_as_completed(self, trigger_id: int, *, agent_name: str) -> None:
@@ -248,6 +295,7 @@ class TriggerService:
                 "next_trigger": None,
                 "last_error": None,
                 "lease_until": None,
+                "lease_token": None,
             },
         )
 
@@ -267,6 +315,7 @@ class TriggerService:
             "next_trigger": to_storage_timestamp(next_fire) if next_fire else None,
             "last_error": None,
             "lease_until": None,
+            "lease_token": None,
         }
         if next_fire is None:
             fields["status"] = "completed"
@@ -289,6 +338,7 @@ class TriggerService:
             {
                 "next_trigger": None,
                 "lease_until": None,
+                "lease_token": None,
             },
         )
         return self._store.fetch_one(trigger_id, agent_name)

@@ -20,6 +20,7 @@ class TriggerRecord(BaseModel):
     status: str
     last_error: Optional[str] = None
     lease_until: Optional[str] = None
+    lease_token: Optional[str] = None
     created_at: str
     updated_at: str
 

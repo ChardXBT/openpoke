@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -46,6 +47,7 @@ class TriggerStore:
             status TEXT NOT NULL DEFAULT 'active',
             last_error TEXT,
             lease_until TEXT,
+            lease_token TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -66,6 +68,8 @@ class TriggerStore:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(triggers)")}
             if "lease_until" not in columns:
                 conn.execute("ALTER TABLE triggers ADD COLUMN lease_until TEXT")
+            if "lease_token" not in columns:
+                conn.execute("ALTER TABLE triggers ADD COLUMN lease_token TEXT")
 
     def insert(self, payload: Dict[str, Any]) -> int:
         with self._lock, self._connect() as conn:
@@ -102,28 +106,28 @@ class TriggerStore:
             cursor = conn.execute(sql, payload)
             return cursor.rowcount > 0
 
-    def update_if_lease(
+    def update_if_lease_token(
         self,
         trigger_id: int,
         agent_name: str,
         fields: Dict[str, Any],
-        lease_until: Optional[str],
+        lease_token: Optional[str],
     ) -> bool:
-        """Update a claimed row only while the caller's lease is still the current one."""
-        if not fields or lease_until is None:
+        """Update a claimed row only while the caller's fencing token is current."""
+        if not fields or not lease_token:
             return False
         assignments = ", ".join(f"{key} = :{key}" for key in fields.keys())
         sql = (
             f"UPDATE triggers SET {assignments}, updated_at = :updated_at"
             " WHERE id = :trigger_id AND agent_name = :agent_name"
-            " AND lease_until = :expected_lease_until"
+            " AND lease_token = :expected_lease_token"
         )
         payload = {
             **fields,
             "updated_at": to_storage_timestamp(utc_now()),
             "trigger_id": trigger_id,
             "agent_name": agent_name,
-            "expected_lease_until": lease_until,
+            "expected_lease_token": lease_token,
         }
         with self._lock, self._connect() as conn:
             cursor = conn.execute(sql, payload)
@@ -175,12 +179,13 @@ class TriggerStore:
         with self._lock, self._connect() as conn:
             ids = [int(row["id"]) for row in conn.execute(select_sql, params).fetchall()]
             for trigger_id in ids:
+                lease_token = uuid.uuid4().hex
                 update_sql = (
-                    "UPDATE triggers SET lease_until = ?, updated_at = ?"
+                    "UPDATE triggers SET lease_until = ?, lease_token = ?, updated_at = ?"
                     " WHERE id = ? AND status = 'active' AND next_trigger IS NOT NULL"
                     " AND next_trigger <= ? AND (lease_until IS NULL OR lease_until < ?)"
                 )
-                update_params: List[Any] = [lease_until_iso, updated_at, trigger_id, before_iso, before_iso]
+                update_params: List[Any] = [lease_until_iso, lease_token, updated_at, trigger_id, before_iso, before_iso]
                 if agent_name:
                     update_sql += " AND agent_name = ?"
                     update_params.append(agent_name)
