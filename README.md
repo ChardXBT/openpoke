@@ -121,7 +121,7 @@ your [Composio](https://composio.dev) keys, and connect in *Settings → Gmail*.
 own assistant (privacy, cost, what it stores) is in [`docs/personal-use.md`](docs/personal-use.md).
 
 ```bash
-python -m pytest                       # 262 offline tests, no keys needed
+python -m pytest                       # offline tests, no keys needed; prints the exact count
 python -m evals.harness.runner --setups b0,b2,ours --split dev --sizes 30,1000 \
     --model anthropic/claude-haiku-5.5 --max-usd 2 --out evals/runs/try
 python -m evals.memory.run --models openai:gpt-6-luna --out evals/runs/memory-try
