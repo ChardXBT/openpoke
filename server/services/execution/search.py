@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+from .embeddings import Embedder, cached_embeddings, openai_embedder
 from .registry import AgentRecord, AgentRegistry, normalize_ref, parse_iso
+from ...logging_config import logger
 
 RECENCY_HALF_LIFE_DAYS = 30.0
 MAX_PER_CONTACT = 2
@@ -35,6 +37,22 @@ _STOPWORDS = frozenset(
     "to up us was we what when where which who will with you your".split()
 )
 
+# Small deterministic paraphrase lattice for the everyday wording personal assistants see.
+# It is deliberately narrow: exact lexical matches score at full strength below, while these
+# neighbours only provide a lower-confidence recall path when the query shares no words.
+_PARAPHRASE_GROUPS = (
+    frozenset("japan japanese tokyo kyoto osaka shinjuku".split()),
+    frozenset("food foods restaurant restaurants dinner lunch ramen sushi eat eats meal meals".split()),
+    frozenset("invoice invoices bill bills billing payment payments unpaid owed".split()),
+    frozenset("email emails mail mails message messages letter".split()),
+    frozenset("flight flights plane airline travel trip trips ticket tickets".split()),
+    frozenset("document documents doc docs paperwork file files visa".split()),
+    frozenset("gift gifts present presents birthday".split()),
+    frozenset("apartment apartments lease leases rental rentals housing".split()),
+    frozenset("mom mother mum".split()),
+    frozenset("dad father".split()),
+)
+
 
 @dataclass
 class SearchHit:
@@ -43,14 +61,33 @@ class SearchHit:
     hidden_for_contact: int = 0
 
 
-def _fts_query(text: str) -> str:
-    """Build a safe FTS5 query: every token quoted, prefix-matched, OR-joined."""
+def _query_tokens(text: str) -> list[str]:
     tokens = []
-    for token in _WORD.findall(text.casefold()):
+    for token in _WORD.findall((text or "").casefold()):
         if len(token) < 2 or token in _STOPWORDS:
             continue
         if token not in tokens:
             tokens.append(token)
+    return tokens[:24]
+
+
+def _paraphrase_tokens(tokens: list[str]) -> list[str]:
+    expanded: list[str] = []
+    original = set(tokens)
+    for token in tokens:
+        for group in _PARAPHRASE_GROUPS:
+            if token not in group:
+                continue
+            for neighbour in sorted(group):
+                if neighbour not in original and len(neighbour) >= 2 and neighbour not in expanded:
+                    expanded.append(neighbour)
+            break
+    return expanded[:24]
+
+
+def _fts_query(text_or_tokens) -> str:
+    """Build a safe FTS5 query: every token quoted, prefix-matched, OR-joined."""
+    tokens = text_or_tokens if isinstance(text_or_tokens, list) else _query_tokens(text_or_tokens)
     return " OR ".join(f'"{t}"*' for t in tokens[:24])
 
 
@@ -66,6 +103,46 @@ def _state_weight(rec: AgentRecord) -> float:
     if rec.archived:
         return _STATE_WEIGHT_ARCHIVED
     return _STATE_WEIGHT_DONE if rec.state == "done" else _STATE_WEIGHT_OPEN
+
+
+
+def _semantic_scores(
+    reg: AgentRegistry,
+    query: str,
+    embedder: Embedder,
+    limit: int = _CANDIDATE_POOL,
+) -> dict[int, float]:
+    """Cosine similarity over cached card embeddings; empty when embeddings are unavailable."""
+    try:
+        import numpy as np
+
+        with reg.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, name, topic, state_note FROM agents ORDER BY id LIMIT 20000"
+            ).fetchall()
+            ref_rows = conn.execute("SELECT agent_id, value FROM agent_refs ORDER BY agent_id, created_at").fetchall()
+        refs: dict[int, list[str]] = {}
+        for row in ref_rows:
+            refs.setdefault(int(row["agent_id"]), []).append(row["value"])
+        ids = [int(row["id"]) for row in rows]
+        cards = [
+            " ".join(part for part in [row["name"], row["topic"], row["state_note"], " ".join(refs.get(int(row["id"]), []))] if part)
+            for row in rows
+        ]
+        vectors = cached_embeddings([query, *cards], embedder)
+        if len(vectors) != len(cards) + 1:
+            return {}
+        matrix = np.asarray(vectors[1:], dtype=np.float32)
+        query_vector = np.asarray(vectors[0], dtype=np.float32)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix /= np.where(norms == 0, 1.0, norms)
+        query_norm = float(np.linalg.norm(query_vector)) or 1.0
+        similarities = matrix @ (query_vector / query_norm)
+        order = np.argsort(-similarities)[:limit]
+        return {ids[int(index)]: float(similarities[int(index)]) for index in order if float(similarities[int(index)]) > 0.0}
+    except Exception as exc:  # embeddings are optional recall; lexical search must never break
+        logger.debug(f"agent semantic search skipped: {exc}")
+        return {}
 
 
 def exact_ref_matches(reg: AgentRegistry, text: str) -> list[AgentRecord]:
@@ -105,6 +182,7 @@ def search_agents(
     include_archived: bool = False,
     limit: int = 8,
     now: Optional[datetime] = None,
+    embedder: Optional[Embedder] = None,
 ) -> list[SearchHit]:
     text = (query or "").strip()
     if not text or limit <= 0:
@@ -123,8 +201,12 @@ def search_agents(
         records[rec.id] = rec
         scores[rec.id] = _EXACT_REF_BONUS + _recency(rec.last_active_at, moment)
 
-    fts = _fts_query(text)
-    if fts:
+    tokens = _query_tokens(text)
+    lexical_passes = [(tokens, 1.0), (_paraphrase_tokens(tokens), 0.45)]
+    for pass_tokens, confidence in lexical_passes:
+        fts = _fts_query(pass_tokens)
+        if not fts:
+            continue
         weights = ", ".join(str(w) for w in _BM25_WEIGHTS)
         with reg.connection() as conn:
             rows = conn.execute(
@@ -142,8 +224,21 @@ def search_agents(
                 if rec is None:
                     continue
                 text_score = max(0.0, -float(row["rank"])) / best
-                blended = text_score * (0.6 + 0.4 * _recency(rec.last_active_at, moment)) * _state_weight(rec)
+                blended = confidence * text_score * (0.6 + 0.4 * _recency(rec.last_active_at, moment)) * _state_weight(rec)
                 scores[agent_id] = scores.get(agent_id, 0.0) + blended
+
+    active_embedder = embedder if embedder is not None else openai_embedder()
+    if active_embedder is not None:
+        semantic = _semantic_scores(reg, text, active_embedder)
+        if semantic:
+            for rec in reg.get_many(semantic):
+                records.setdefault(rec.id, rec)
+            for agent_id, similarity in semantic.items():
+                rec = records.get(agent_id)
+                if rec is None:
+                    continue
+                semantic_score = similarity * (0.6 + 0.4 * _recency(rec.last_active_at, moment)) * _state_weight(rec)
+                scores[agent_id] = scores.get(agent_id, 0.0) + 0.55 * semantic_score
 
     ranked = sorted(
         (records[i] for i in scores if include_archived or not records[i].archived),

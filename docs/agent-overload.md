@@ -280,8 +280,5 @@ of all memory runs: $0.49.
 - Trigger claim/lease so a reminder fires once across workers and restarts.
 - Per-turn result batches so fast answers do not wait for slow agents.
 - Prompt-caching layout: stable system prompt and working set first, the turn last.
-- Evaluate learning-from-clarifications with multi-turn scenarios (it is built and unit
-  tested; the single-turn eval cannot exercise it).
-- Optional embeddings in `search_agents` for paraphrases with no shared words ("that japan
-  food list" vs "Tokyo Ramen Search"), fused with the lexical ranking.
+- Run the frozen heldout3 routing split once live keys are available and replace the headline numbers.
 - Multi-tenant storage (Postgres, tenant-partitioned refs and FTS) and push-based Gmail.

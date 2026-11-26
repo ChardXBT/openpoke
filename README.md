@@ -35,7 +35,9 @@ already in the system.
   Open items track how busy you are, not how long you've used Poke (Little's Law: about 60 items
   for 30 tasks a day that take 2 days).
 - **Resolves references in code.** Thread ids, draft ids, contacts, aliases learned from your
-  answers, and "the one Poke just showed you" settle most references before the model guesses. An
+  clarifications, and "the one Poke just showed you" settle most references before the model guesses;
+  exact ids always outrank semantic matches. Optional OpenAI embeddings add semantic recall for
+  paraphrases when `OPENAI_API_KEY` is set; without a key search stays lexical. An
   incoming reply wakes the agent that owns its thread, and closes the item that was waiting on it.
 - **Asks when it's truly ambiguous.** An irreversible step on an ambiguous reference is refused
   until you choose. Work that another agent owns is redirected to it, and look-alike new work is
