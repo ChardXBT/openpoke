@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Deque, Iterable, List, Optional, Set
 
 from ...logging_config import logger
+from ..tenancy import cached_tenant_store
 
 
 class GmailSeenStore:
@@ -116,4 +117,34 @@ class GmailSeenStore:
             )
 
 
-__all__ = ["GmailSeenStore"]
+_DEFAULT_BASE_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_seen_store: GmailSeenStore | None = None
+_seen_lock = threading.Lock()
+_seen_cache: dict[str, GmailSeenStore] = {}
+
+
+def get_gmail_seen_store(max_entries: int = 300) -> GmailSeenStore:
+    """Return the legacy seen store or the current tenant's isolated copy."""
+
+    def legacy() -> GmailSeenStore:
+        return GmailSeenStore(_DEFAULT_BASE_DIR / "gmail_seen.json", max_entries)
+
+    def tenant(root: Path) -> GmailSeenStore:
+        return GmailSeenStore(root / "gmail_seen.json", max_entries)
+
+    def set_legacy(instance: GmailSeenStore) -> None:
+        global _seen_store
+        _seen_store = instance
+
+    return cached_tenant_store(
+        cache=_seen_cache,
+        lock=_seen_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DEFAULT_BASE_DIR,
+        set_legacy=set_legacy,
+    )
+
+
+__all__ = ["GmailSeenStore", "get_gmail_seen_store"]

@@ -9,6 +9,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..logging_config import logger
+from .tenancy import cached_tenant_store
 
 
 class TimezoneStore:
@@ -68,11 +69,31 @@ class TimezoneStore:
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _TIMEZONE_PATH = _DATA_DIR / "timezone.txt"
 
-_timezone_store = TimezoneStore(_TIMEZONE_PATH)
+_timezone_store: TimezoneStore | None = None
+_timezone_lock = threading.Lock()
+_timezone_cache: dict[str, TimezoneStore] = {}
 
 
 def get_timezone_store() -> TimezoneStore:
-    return _timezone_store
+    def legacy() -> TimezoneStore:
+        return TimezoneStore(_TIMEZONE_PATH)
+
+    def tenant(root: Path) -> TimezoneStore:
+        return TimezoneStore(root / "timezone.txt")
+
+    def set_legacy(instance: TimezoneStore) -> None:
+        global _timezone_store
+        _timezone_store = instance
+
+    return cached_tenant_store(
+        cache=_timezone_cache,
+        lock=_timezone_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DATA_DIR,
+        set_legacy=set_legacy,
+    )
 
 
 __all__ = ["TimezoneStore", "get_timezone_store"]

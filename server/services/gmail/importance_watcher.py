@@ -10,7 +10,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 from .client import execute_gmail_tool, get_active_gmail_user_id
 from .processing import EmailTextCleaner, ProcessedEmail, parse_gmail_fetch_response
-from .seen_store import GmailSeenStore
+from .seen_store import GmailSeenStore, get_gmail_seen_store
 from .importance_classifier import classify_email_importance
 from ...logging_config import logger
 from ...utils.timezones import convert_to_user_timezone
@@ -69,7 +69,7 @@ class ImportantEmailWatcher:
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task[None]] = None
         self._running = False
-        self._seen_store = seen_store or GmailSeenStore(_DEFAULT_SEEN_PATH, DEFAULT_SEEN_LIMIT)
+        self._seen_store = seen_store or get_gmail_seen_store(DEFAULT_SEEN_LIMIT)
         self._cleaner = EmailTextCleaner(max_url_length=60)
         self._has_seeded_initial_snapshot = False
         self._last_poll_timestamp: Optional[datetime] = None
