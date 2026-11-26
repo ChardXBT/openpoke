@@ -140,3 +140,43 @@ def test_existing_trigger_database_gains_lease_column_and_due_index(tmp_path):
     conn.close()
     assert "lease_until" in columns
     assert "idx_triggers_next_trigger" in indexes
+
+
+def test_stale_recurring_worker_cannot_clear_a_newer_lease(tmp_path, monkeypatch):
+    import server.services.triggers.service as trigger_service_mod
+
+    service = _service(tmp_path)
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    start = base - timedelta(hours=2)
+    recurrence = build_recurrence("RRULE:FREQ=DAILY", start, ZoneInfo("UTC"))
+    timestamp = to_storage_timestamp(base)
+    trigger_id = service._store.insert({
+        "agent_name": "Recurring Reminder",
+        "payload": "remind again",
+        "start_time": to_storage_timestamp(start),
+        "next_trigger": to_storage_timestamp(base - timedelta(minutes=1)),
+        "recurrence_rule": recurrence,
+        "timezone": "UTC",
+        "status": "active",
+        "last_error": None,
+        "created_at": timestamp,
+        "updated_at": timestamp,
+    })
+
+    monkeypatch.setattr(trigger_service_mod, "utc_now", lambda: base)
+    first = service.claim_due_triggers(before=base)[0]
+    expired = to_storage_timestamp(base - timedelta(seconds=1))
+    service._store.update(trigger_id, first.agent_name, {"lease_until": expired})
+
+    later = base + timedelta(seconds=130)
+    monkeypatch.setattr(trigger_service_mod, "utc_now", lambda: later)
+    second = service.claim_due_triggers(before=later)[0]
+    assert second.lease_until != first.lease_until
+
+    service.release_lease(first)
+    stored = service._store.fetch_one(trigger_id, first.agent_name)
+    assert stored is not None and stored.lease_until == second.lease_until
+
+    service.complete_execution(first)
+    stored = service._store.fetch_one(trigger_id, first.agent_name)
+    assert stored is not None and stored.lease_until == second.lease_until

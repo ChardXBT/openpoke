@@ -102,6 +102,33 @@ class TriggerStore:
             cursor = conn.execute(sql, payload)
             return cursor.rowcount > 0
 
+    def update_if_lease(
+        self,
+        trigger_id: int,
+        agent_name: str,
+        fields: Dict[str, Any],
+        lease_until: Optional[str],
+    ) -> bool:
+        """Update a claimed row only while the caller's lease is still the current one."""
+        if not fields or lease_until is None:
+            return False
+        assignments = ", ".join(f"{key} = :{key}" for key in fields.keys())
+        sql = (
+            f"UPDATE triggers SET {assignments}, updated_at = :updated_at"
+            " WHERE id = :trigger_id AND agent_name = :agent_name"
+            " AND lease_until = :expected_lease_until"
+        )
+        payload = {
+            **fields,
+            "updated_at": to_storage_timestamp(utc_now()),
+            "trigger_id": trigger_id,
+            "agent_name": agent_name,
+            "expected_lease_until": lease_until,
+        }
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(sql, payload)
+            return cursor.rowcount > 0
+
     def list_for_agent(self, agent_name: str) -> List[TriggerRecord]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(

@@ -222,16 +222,22 @@ class TriggerService:
     def complete_execution(self, trigger: TriggerRecord) -> None:
         """Finish a claimed run: complete one-shots, or release a recurring lease."""
         if trigger.recurrence_rule:
-            self._store.update(
+            self._store.update_if_lease(
                 trigger.id,
                 trigger.agent_name,
                 {"lease_until": None, "last_error": None},
+                trigger.lease_until,
             )
         else:
             self.mark_as_completed(trigger.id, agent_name=trigger.agent_name)
 
     def release_lease(self, trigger: TriggerRecord) -> None:
-        self._store.update(trigger.id, trigger.agent_name, {"lease_until": None})
+        self._store.update_if_lease(
+            trigger.id,
+            trigger.agent_name,
+            {"lease_until": None},
+            trigger.lease_until,
+        )
 
     def mark_as_completed(self, trigger_id: int, *, agent_name: str) -> None:
         self._store.update(
