@@ -1,3 +1,5 @@
+import { pythonAuthHeaders } from '@/lib/ownerAuth';
+
 export const runtime = 'nodejs';
 
 type UIMsgPart = { type: string; text?: string };
@@ -46,7 +48,7 @@ export async function POST(req: Request) {
   try {
     const upstream = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/plain, */*' },
+      headers: { 'Content-Type': 'application/json', Accept: 'text/plain, */*', ...pythonAuthHeaders() },
       body: JSON.stringify(payload),
     });
     const text = await upstream.text();

@@ -76,8 +76,9 @@ forget a fact) and its open items. The same data is available over HTTP:
 | `POST /api/v1/demo/reset` | (demo mailbox) start the mailbox over |
 
 ```bash
-curl -s localhost:8001/api/v1/me
-curl -s -X POST localhost:8001/api/v1/demo/email -H 'content-type: application/json' \
+TOKEN=$(grep -m1 '^OPENPOKE_OWNER_TOKEN=' .env | cut -d= -f2-)
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8001/api/v1/me
+curl -s -H "Authorization: Bearer $TOKEN" -X POST localhost:8001/api/v1/demo/email -H 'content-type: application/json' \
   -d '{"sender": "Alice Chen <alice.chen@acme.com>", "subject": "Re: Lunch Thursday?", "body": "12:30 works!"}'
 ```
 
@@ -87,10 +88,16 @@ curl -s -X POST localhost:8001/api/v1/demo/email -H 'content-type: application/j
   (`agents.db`), profile (`profile.db`), demo mailbox. Back up or wipe that folder and that's all of
   it. The only things that leave are model calls (to OpenRouter or OpenAI) and Gmail calls
   (to Composio, when connected).
-- **Local only by default.** The API has no login, and it can read and send your email. So it
-  listens on `127.0.0.1` and accepts browser calls only from the web app's own origin. Upstream
-  listened on every interface with CORS `*`, which let anyone on your Wi‑Fi, or any web page you
-  had open, drive it. Set `OPENPOKE_HOST=0.0.0.0` only behind your own auth.
+- **Local only and owner-authenticated.** The API can read and send your email, so every
+  `/api/v1` route except `/health` requires `Authorization: Bearer $OPENPOKE_OWNER_TOKEN`. On first
+  server start a strong token is generated into `.env` with owner-only file permissions; the Next.js
+  API routes read it server-side and forward it, so browsers never receive it. The API still listens
+  on `127.0.0.1` by default and accepts browser calls only from the web app's own origin.
+- **Phone access goes through a private tunnel, not a bare port.** Keep the Python API on localhost.
+  Expose only the Next.js app (`localhost:3000`) with Tailscale Serve/Funnel limited to your tailnet,
+  or with Cloudflare Tunnel protected by Cloudflare Access. Do not use an unauthenticated public
+  tunnel: the web proxy is allowed to use the owner token. The panel moves below the chat on narrow
+  screens instead of disappearing.
 - **Irreversible steps ask first when they're ambiguous.** If "send it" could mean two drafts,
   Poke asks which one instead of guessing.
 

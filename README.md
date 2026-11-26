@@ -133,7 +133,9 @@ python -m evals.memory.run --models openai:gpt-6-luna --out evals/runs/memory-tr
 
 - The API listened on every network interface with CORS `*` and no auth, so anyone on your Wi‑Fi,
   or any web page you had open, could make it read and send your email. It now listens on
-  `127.0.0.1` and accepts browser calls only from the web app.
+  `127.0.0.1`, accepts browser calls only from the web app, and requires a single owner token on
+  every `/api/v1` route except health. The token is generated into `.env` on first server start and
+  the Next.js server sends it server-side, so it never enters the browser bundle.
 - Two runs on the same agent interleaved and could double-send. Runs on one agent are now serialized.
 - Execution agents replayed their whole history on every call. Now it's the last 20 requests.
 - OpenPoke didn't start on Windows (`fcntl`), and its configured model had been retired.

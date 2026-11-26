@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -7,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .config import get_settings
+from .config import ensure_owner_token, get_settings
 from .logging_config import configure_logging, logger
 from .routes import api_router
 from .services import get_important_email_watcher, get_trigger_scheduler
@@ -61,6 +62,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def _bearer_token(request: Request) -> str:
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() if scheme.casefold() == "bearer" else ""
+
+
+@app.middleware("http")
+async def _require_owner_token(request: Request, call_next):
+    """Fail closed on every API route except health; the web proxy supplies the token server-side."""
+    path = request.url.path
+    if not path.startswith("/api/v1") or path == "/api/v1/health":
+        return await call_next(request)
+
+    configured = (get_settings().owner_token or "").strip()
+    supplied = _bearer_token(request)
+    if not configured or not supplied or not hmac.compare_digest(supplied, configured):
+        return JSONResponse(
+            {"ok": False, "error": "Unauthorized"},
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
 register_exception_handlers(app)
 app.include_router(api_router)
 
@@ -68,6 +93,7 @@ app.include_router(api_router)
 @app.on_event("startup")
 # Initialize background services (trigger scheduler and email watcher) when the app starts
 async def _start_trigger_scheduler() -> None:
+    ensure_owner_token(get_settings())
     scheduler = get_trigger_scheduler()
     await scheduler.start()
     watcher = get_important_email_watcher()

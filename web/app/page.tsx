@@ -229,9 +229,9 @@ export default function Page() {
   const clearError = useCallback(() => setError(null), [setError]);
 
   return (
-    <main className="chat-bg min-h-screen p-4 sm:p-6">
-      <div className="mx-auto flex w-full max-w-6xl items-start gap-6">
-      <div className="chat-wrap flex flex-col">
+    <main className="chat-bg min-h-screen p-2 sm:p-6">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 lg:flex-row lg:items-start lg:gap-6">
+      <div className="chat-wrap flex flex-1 flex-col">
         <ChatHeader onOpenSettings={openSettings} onClearHistory={triggerClearHistory} />
 
         <div className="card flex-1 overflow-hidden">
@@ -257,7 +257,7 @@ export default function Page() {
 
         <SettingsModal open={open} onClose={closeSettings} settings={settings} onSave={setSettings} />
       </div>
-      <aside className="hidden w-80 shrink-0 lg:block">
+      <aside className="w-full lg:w-80 lg:shrink-0">
         <PokePanel />
       </aside>
       </div>
