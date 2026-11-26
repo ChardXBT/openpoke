@@ -36,7 +36,8 @@ The following singleton storage factories are tenant-aware caches keyed by rando
 - conversation and working-memory logs;
 - demo mailbox state;
 - execution-agent logs, legacy roster and timezone preference;
-- Gmail seen-message state (`gmail_seen.json`).
+- Gmail seen-message state (`gmail_seen.json`);
+- optional agent-search embedding vectors (`embeddings/`, including an explicitly configured cache directory).
 
 Numeric agent ids and trigger ids remain local to a tenant database. They are not global handles and must never be exposed across tenant boundaries.
 
@@ -53,6 +54,6 @@ Gmail account activation is scoped by tenant namespace. Without a tenant context
 
 ## Local verification
 
-Offline tests cover missing/malformed ids, unicode/separator/space-containing opaque ids, wrong tenants, concurrent profile access, contact/reference and cross-tenant search isolation, tenant-local numeric ids, reminder isolation, conversation memory isolation, demo mail and Gmail seen-state isolation, Gmail active-account isolation, corrupt registries, concurrent provisioning, execution batching/locks, a tenant literally named `default`, and id reuse after retirement.
+Offline tests cover missing/malformed ids, unicode/separator/space-containing opaque ids, wrong tenants, concurrent profile access, contact/reference and cross-tenant search isolation, tenant-local numeric ids, reminder isolation, conversation memory isolation, demo mail and Gmail seen-state isolation, Gmail active-account isolation, embedding-cache isolation, corrupt registries, concurrent provisioning, execution batching/locks, a tenant literally named `default`, and id reuse after retirement.
 
 `python evals/tenant_load.py` runs a local filesystem/SQLite load harness with no hosted deploy, network service, model key or real mail. It writes profile memory, contacts, reminders and Gmail seen state; reports throughput; and fails if any tenant observes foreign memory/mail or incomplete local state.

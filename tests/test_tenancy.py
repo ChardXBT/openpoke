@@ -398,6 +398,35 @@ def test_tenant_named_default_uses_a_tenant_namespace_not_legacy_files(tmp_path)
     assert not (tmp_path / "profile.db").exists()
 
 
+def test_embedding_cache_is_tenant_scoped(tmp_path, monkeypatch):
+    enable(tmp_path)
+    monkeypatch.setenv("OPENPOKE_EMBEDDING_CACHE_DIR", str(tmp_path / "shared-vectors"))
+    monkeypatch.setattr("server.services.execution.embeddings._MEMORY_CACHE", {})
+    alice_namespace = provision_tenant("alice")
+    bob_namespace = provision_tenant("bob")
+    from server.services.execution.embeddings import cache_dir, cached_embeddings
+
+    calls = []
+
+    def fake_embedder(texts):
+        calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    with tenant_context("alice"):
+        alice_dir = cache_dir()
+        assert alice_dir == tmp_path / "shared-vectors" / "tenants" / alice_namespace
+        cached_embeddings(["shared private card"], fake_embedder)
+    with tenant_context("bob"):
+        bob_dir = cache_dir()
+        assert bob_dir == tmp_path / "shared-vectors" / "tenants" / bob_namespace
+        cached_embeddings(["shared private card"], fake_embedder)
+
+    assert alice_dir != bob_dir
+    assert len(list(alice_dir.glob("*.json"))) == 1
+    assert len(list(bob_dir.glob("*.json"))) == 1
+    assert len(calls) == 2
+
+
 def test_corrupt_tenant_registry_fails_closed(tmp_path):
     enable(tmp_path)
     provision_tenant("alice")
