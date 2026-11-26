@@ -309,6 +309,14 @@ def override_route_settings(app, **values):
     walk(app.router)
 
 
+def test_default_push_state_path_honors_configured_data_dir(tmp_path, monkeypatch):
+    from server.services.gmail.push import _default_push_path
+
+    monkeypatch.delenv("OPENPOKE_MULTI_TENANT", raising=False)
+    monkeypatch.setenv("OPENPOKE_DATA_DIR", str(tmp_path / "custom-data"))
+    assert _default_push_path() == tmp_path / "custom-data" / "gmail_push_state.json"
+
+
 def test_watch_renewer_uses_injected_service_without_network(tmp_path):
     from server.services.gmail.push import GmailPushWatchRenewer
 

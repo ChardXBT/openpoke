@@ -598,8 +598,12 @@ def get_gmail_push_watch_renewer() -> GmailPushWatchRenewer:
         return _renewer
 
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_DEFAULT_PUSH_PATH = _DATA_DIR / "gmail_push_state.json"
+def _default_push_path() -> Path:
+    from ..tenancy import data_root, scoped_data_dir
+
+    return scoped_data_dir(data_root()) / "gmail_push_state.json"
+
+
 _service_lock = threading.Lock()
 _service: Optional[GmailPushService] = None
 
@@ -618,7 +622,7 @@ def build_default_push_service() -> GmailPushService:
     watcher = get_important_email_watcher()
     return GmailPushService(
         ComposioGmailProxyGateway(user_id),
-        PushStateStore(_DEFAULT_PUSH_PATH),
+        PushStateStore(_default_push_path()),
         seen_store=watcher._seen_store,
     )
 
