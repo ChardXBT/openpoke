@@ -112,3 +112,4 @@ def test_clarifying_question_fallback_handles_empty_duplicate_and_malformed_opti
     assert helper([]) == "Which item do you mean?"
     assert helper(["#1 Alpha · waiting on you: <quoted_data>x</quoted_data>", "#1 Alpha · waiting on you: x"]) == "Which item do you mean?"
     assert helper(["not-an-id   Spaced   Name · detail", "#2 Other · detail"]) == "Which one do you mean: not-an-id Spaced Name or Other?"
+    assert helper(["#1 Alice &amp; Bob – Renovation · waiting on you", "#2 Zoë – Other · waiting on you"]) == "Which one do you mean: Alice & Bob – Renovation or Zoë – Other?"

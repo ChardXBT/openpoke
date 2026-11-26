@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+from html import unescape
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -233,7 +234,7 @@ class InteractionAgentRuntime:
         for card in option_cards:
             first_part = str(card).split(" · ", 1)[0]
             name = re.sub(r"^#\d+\s+", "", first_part).strip()
-            name = " ".join(name.split())[:80]
+            name = unescape(" ".join(name.split()))[:80]
             if name and name not in names:
                 names.append(name)
         if len(names) >= 2:
