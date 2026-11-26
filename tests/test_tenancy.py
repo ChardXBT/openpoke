@@ -257,12 +257,14 @@ def test_api_middleware_requires_valid_tenant_and_scopes_requests(tmp_path):
     enable(tmp_path)
     from fastapi.testclient import TestClient
     from server.app import app
+    auth = {"Authorization": "Bearer offline-test-owner-token"}
     with TestClient(app) as client:
-        assert client.get("/api/v1/meta/timezone").status_code == 400
-        assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "bad\x00tenant"}).status_code == 400
-        assert client.post("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "alice"}, json={"timezone": "America/Toronto"}).status_code == 200
-        assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "alice"}).json()["timezone"] == "America/Toronto"
-        assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "bob"}).json()["timezone"] == "UTC"
+        assert client.get("/api/v1/meta/timezone", headers={"X-Openpoke-Tenant": "alice"}).status_code == 401
+        assert client.get("/api/v1/meta/timezone", headers=auth).status_code == 400
+        assert client.get("/api/v1/meta/timezone", headers={**auth, "X-Openpoke-Tenant": "bad\x00tenant"}).status_code == 400
+        assert client.post("/api/v1/meta/timezone", headers={**auth, "X-Openpoke-Tenant": "alice"}, json={"timezone": "America/Toronto"}).status_code == 200
+        assert client.get("/api/v1/meta/timezone", headers={**auth, "X-Openpoke-Tenant": "alice"}).json()["timezone"] == "America/Toronto"
+        assert client.get("/api/v1/meta/timezone", headers={**auth, "X-Openpoke-Tenant": "bob"}).json()["timezone"] == "UTC"
         assert client.get("/api/v1/health").status_code == 200
 
 
@@ -318,7 +320,7 @@ def test_execution_batches_and_agent_locks_are_tenant_scoped(tmp_path, monkeypat
     from server.agents.execution_agent.batch_manager import ExecutionBatchManager, ExecutionResult, _get_agent_lock
 
     async def run():
-        manager = ExecutionBatchManager()
+        manager = ExecutionBatchManager(coalesce_seconds=0)
         sent = []
 
         async def dispatch(payload):
@@ -326,10 +328,10 @@ def test_execution_batches_and_agent_locks_are_tenant_scoped(tmp_path, monkeypat
 
         monkeypatch.setattr(manager, "_dispatch_to_interaction_agent", dispatch)
         with tenant_context("alice"):
-            alice_batch = await manager._register_pending_execution("shared-agent", "alice work", "alice-request")
+            alice_batch = await manager._register_pending_execution("shared-agent", "alice work", "alice-request", "shared-turn")
             alice_lock = _get_agent_lock("shared-agent")
         with tenant_context("bob"):
-            bob_batch = await manager._register_pending_execution("shared-agent", "bob work", "bob-request")
+            bob_batch = await manager._register_pending_execution("shared-agent", "bob work", "bob-request", "shared-turn")
             bob_lock = _get_agent_lock("shared-agent")
         assert alice_batch != bob_batch
         assert alice_lock is not bob_lock
@@ -338,10 +340,11 @@ def test_execution_batches_and_agent_locks_are_tenant_scoped(tmp_path, monkeypat
             await manager._complete_execution(alice_batch, ExecutionResult("shared-agent", True, "alpha done"), "shared-agent")
         with tenant_context("bob"):
             await manager._complete_execution(bob_batch, ExecutionResult("shared-agent", True, "beta done"), "shared-agent")
+        await asyncio.sleep(0.01)
         return sent
 
     sent = asyncio.run(run())
-    assert sent == ["[SUCCESS] shared-agent: alpha done", "[SUCCESS] shared-agent: beta done"]
+    assert sorted(sent) == ["[SUCCESS] shared-agent: alpha done", "[SUCCESS] shared-agent: beta done"]
 
 
 def test_importance_watcher_instances_are_tenant_scoped(tmp_path, monkeypatch):
