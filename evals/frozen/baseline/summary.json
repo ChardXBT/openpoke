@@ -1,0 +1,88 @@
+{
+  "frozen_hash": "6763a75edab93db8343b55ed6e2d4324806e1808cf88a20144478068baa167ea",
+  "passed": 7,
+  "total": 7,
+  "pass_rate": 1.0,
+  "search": {
+    "passed": 5,
+    "total": 5,
+    "rows": [
+      {
+        "id": "exact-ref-first",
+        "passed": true,
+        "ids": [
+          1,
+          3,
+          2,
+          20
+        ]
+      },
+      {
+        "id": "paraphrase-japan-food",
+        "passed": true,
+        "ids": [
+          2,
+          20
+        ]
+      },
+      {
+        "id": "exact-lexical-before-paraphrase",
+        "passed": true,
+        "ids": [
+          20,
+          2
+        ]
+      },
+      {
+        "id": "unicode-exact-name",
+        "passed": true,
+        "ids": [
+          30
+        ]
+      },
+      {
+        "id": "empty-query",
+        "passed": true,
+        "ids": []
+      }
+    ]
+  },
+  "memory": {
+    "passed": 2,
+    "total": 2,
+    "rows": [
+      {
+        "id": "multi-turn-person-update",
+        "passed": true,
+        "turns": [
+          {
+            "passed": true,
+            "facts": [
+              "- dentist (person): Dr. Zoë Patel"
+            ]
+          },
+          {
+            "passed": true,
+            "facts": [
+              "- dentist (person): Dr. Zoë Patel <zoe.patel@example.com>"
+            ]
+          },
+          {
+            "passed": true,
+            "facts": []
+          }
+        ]
+      },
+      {
+        "id": "untrusted-context-no-write",
+        "passed": true,
+        "turns": [
+          {
+            "passed": true,
+            "facts": []
+          }
+        ]
+      }
+    ]
+  }
+}
