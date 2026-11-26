@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 
 from ....logging_config import logger
 from ....utils.timezones import now_in_user_timezone
+from ...tenancy import cached_tenant_store
 from .state import LogEntry, SummaryState
 
 
@@ -242,15 +243,29 @@ class WorkingMemoryLog:
 
 _working_memory_log: Optional[WorkingMemoryLog] = None
 _factory_lock = threading.Lock()
+_working_memory_cache: dict[str, WorkingMemoryLog] = {}
 
 
 def get_working_memory_log() -> WorkingMemoryLog:
-    global _working_memory_log
-    if _working_memory_log is None:
-        with _factory_lock:
-            if _working_memory_log is None:
-                _working_memory_log = WorkingMemoryLog(_WORKING_MEMORY_LOG_PATH)
-    return _working_memory_log
+    def legacy() -> WorkingMemoryLog:
+        return WorkingMemoryLog(_WORKING_MEMORY_LOG_PATH)
+
+    def tenant(root: Path) -> WorkingMemoryLog:
+        return WorkingMemoryLog(root / "conversation" / "poke_working_memory.log")
+
+    def set_legacy(instance: WorkingMemoryLog) -> None:
+        global _working_memory_log
+        _working_memory_log = instance
+
+    return cached_tenant_store(
+        cache=_working_memory_cache,
+        lock=_factory_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DATA_DIR,
+        set_legacy=set_legacy,
+    )
 
 
 __all__ = ["WorkingMemoryLog", "get_working_memory_log"]

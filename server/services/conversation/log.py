@@ -10,6 +10,7 @@ from ...config import get_settings
 from ...logging_config import logger
 from ...models import ChatMessage
 from ...utils.timezones import now_in_user_timezone
+from ..tenancy import cached_tenant_store
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - used for type checkers only
@@ -211,11 +212,31 @@ class ConversationLog:
             )
 
 
-_conversation_log = ConversationLog(_CONVERSATION_LOG_PATH)
+_conversation_log: Optional[ConversationLog] = None
+_conversation_lock = threading.Lock()
+_conversation_cache: dict[str, ConversationLog] = {}
 
 
 def get_conversation_log() -> ConversationLog:
-    return _conversation_log
+    def legacy() -> ConversationLog:
+        return ConversationLog(_CONVERSATION_LOG_PATH)
+
+    def tenant(root: Path) -> ConversationLog:
+        return ConversationLog(root / "conversation" / "poke_conversation.log")
+
+    def set_legacy(instance: ConversationLog) -> None:
+        global _conversation_log
+        _conversation_log = instance
+
+    return cached_tenant_store(
+        cache=_conversation_cache,
+        lock=_conversation_lock,
+        legacy_cache_name="default",
+        legacy_factory=legacy,
+        tenant_factory=tenant,
+        base_data_dir=_DATA_DIR,
+        set_legacy=set_legacy,
+    )
 
 
 __all__ = ["ConversationLog", "get_conversation_log"]
