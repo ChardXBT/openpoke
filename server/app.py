@@ -104,6 +104,10 @@ async def _start_trigger_scheduler() -> None:
     await scheduler.start()
     watcher = get_important_email_watcher()
     await watcher.start()
+    if _settings.gmail_push_topic:
+        from .services.gmail.push import get_gmail_push_watch_renewer
+
+        await get_gmail_push_watch_renewer().start()
 
 
 @app.on_event("shutdown")
@@ -115,6 +119,10 @@ async def _stop_trigger_scheduler() -> None:
     await scheduler.stop()
     watcher = get_important_email_watcher()
     await watcher.stop()
+    if _settings.gmail_push_topic:
+        from .services.gmail.push import get_gmail_push_watch_renewer
+
+        await get_gmail_push_watch_renewer().stop()
 
 
 __all__ = ["app"]
