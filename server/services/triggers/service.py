@@ -21,6 +21,7 @@ from .utils import (
 
 
 MISSED_TRIGGER_GRACE_PERIOD = timedelta(minutes=5)
+TRIGGER_LEASE_DURATION = timedelta(minutes=2)
 
 
 class TriggerService:
@@ -189,6 +190,49 @@ class TriggerService:
         iso_cutoff = to_storage_timestamp(before)
         return self._store.fetch_due(agent_name, iso_cutoff)
 
+    def claim_due_triggers(
+        self,
+        *,
+        before: datetime,
+        agent_name: Optional[str] = None,
+        lease_seconds: int = int(TRIGGER_LEASE_DURATION.total_seconds()),
+    ) -> List[TriggerRecord]:
+        """Return due triggers after atomically leasing them to this worker."""
+        lease_until = to_storage_timestamp(utc_now() + timedelta(seconds=max(1, lease_seconds)))
+        return self._store.claim_due(agent_name, to_storage_timestamp(before), lease_until)
+
+    def prepare_for_execution(self, trigger: TriggerRecord, *, fired_at: datetime) -> TriggerRecord:
+        """Advance a recurring trigger before running it, while keeping the lease intact.
+
+        One-shot triggers keep their due timestamp while leased, so a worker crash can be
+        retried after the lease expires instead of silently dropping the reminder.
+        """
+        if not trigger.recurrence_rule:
+            return trigger
+        tz = resolve_timezone(trigger.timezone)
+        next_fire = self._compute_next_after(trigger.recurrence_rule, fired_at, tz)
+        fields: Dict[str, Any] = {
+            "next_trigger": to_storage_timestamp(next_fire) if next_fire else None,
+        }
+        if next_fire is None:
+            fields["status"] = "completed"
+        self._store.update(trigger.id, trigger.agent_name, fields)
+        return self._store.fetch_one(trigger.id, trigger.agent_name) or trigger
+
+    def complete_execution(self, trigger: TriggerRecord) -> None:
+        """Finish a claimed run: complete one-shots, or release a recurring lease."""
+        if trigger.recurrence_rule:
+            self._store.update(
+                trigger.id,
+                trigger.agent_name,
+                {"lease_until": None, "last_error": None},
+            )
+        else:
+            self.mark_as_completed(trigger.id, agent_name=trigger.agent_name)
+
+    def release_lease(self, trigger: TriggerRecord) -> None:
+        self._store.update(trigger.id, trigger.agent_name, {"lease_until": None})
+
     def mark_as_completed(self, trigger_id: int, *, agent_name: str) -> None:
         self._store.update(
             trigger_id,
@@ -197,6 +241,7 @@ class TriggerService:
                 "status": "completed",
                 "next_trigger": None,
                 "last_error": None,
+                "lease_until": None,
             },
         )
 
@@ -215,6 +260,7 @@ class TriggerService:
         fields: Dict[str, Any] = {
             "next_trigger": to_storage_timestamp(next_fire) if next_fire else None,
             "last_error": None,
+            "lease_until": None,
         }
         if next_fire is None:
             fields["status"] = "completed"
@@ -236,6 +282,7 @@ class TriggerService:
             agent_name,
             {
                 "next_trigger": None,
+                "lease_until": None,
             },
         )
         return self._store.fetch_one(trigger_id, agent_name)
