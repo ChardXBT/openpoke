@@ -22,6 +22,7 @@ A tenant id is a routing identifier only. It is not a secret and must not become
 - tenant files live below `data/tenants/<random-namespace>/`; the public id never appears in the path;
 - retiring a tenant removes the active mapping. Provisioning the same public id again allocates a new random namespace, so id reuse cannot inherit retired files;
 - corrupt or unreadable registry state fails closed rather than falling back to shared storage;
+- registry read/modify/write cycles are serialized with an OS-backed file lock (`registry.lock`) and committed by atomic replacement, so concurrent writer processes cannot lose each other's tenant mappings; a crashed writer leaves either the old or the new complete registry and its lock is released by the OS;
 - once a request or worker enters a tenant context, that context pins the random namespace. Retiring and re-provisioning the public id mid-request cannot move the in-flight operation onto the replacement tenant's files.
 
 No existing single-user data is migrated automatically; enabling the flag starts each provisioned tenant with empty tenant-local storage. Migration/export is an owner decision because it changes data ownership.
@@ -46,13 +47,12 @@ Gmail account activation is scoped by tenant namespace. Without a tenant context
 
 - `X-Openpoke-Tenant` is a groundwork contract, not authentication. A real deployment still needs a trusted identity boundary that authenticates the user and sets this header/server-side context. Never let clients spoof it through an untrusted proxy.
 - The global trigger scheduler and important-email watcher are stopped when the flag is enabled. Tenant-aware runners must iterate active tenant contexts explicitly before reminders or proactive mail are enabled.
-- Tenant registry updates are sufficient for the local load harness but need a transactional database or file lock before multiple writer processes use them.
 - Retention/deletion currently tombstones the mapping; secure deletion of the retired namespace is a separate owner decision.
 - Composio/Gmail connection lifecycle needs a live owner review. The code scopes the active account, but OAuth account ownership must be verified with the real provider before deployment.
 - Extra memory sources remain disabled; this change does not add or enable any memory source.
 
 ## Local verification
 
-Offline tests cover missing/malformed ids, unicode/separator/space-containing opaque ids, wrong tenants, concurrent profile access, contact/reference and cross-tenant search isolation, tenant-local numeric ids, reminder isolation, conversation memory isolation, demo mail and Gmail seen-state isolation, Gmail active-account isolation, corrupt registries, concurrent provisioning, execution batching/locks, a tenant literally named `default`, and id reuse after retirement.
+Offline tests cover missing/malformed ids, unicode/separator/space-containing opaque ids, wrong tenants, concurrent profile access, contact/reference and cross-tenant search isolation, tenant-local numeric ids, reminder isolation, conversation memory isolation, demo mail and Gmail seen-state isolation, Gmail active-account isolation, corrupt registries, concurrent thread/process provisioning, retire/re-provision races, stale lock and partial-write artifacts, execution batching/locks, a tenant literally named `default`, and id reuse after retirement.
 
 `python evals/tenant_load.py` runs a local filesystem/SQLite load harness with no hosted deploy, network service, model key or real mail. It writes profile memory, contacts, reminders and Gmail seen state; reports throughput; and fails if any tenant observes foreign memory/mail or incomplete local state.
